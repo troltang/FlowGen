@@ -1,11 +1,13 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Variable, Library } from '../types';
+import { Variable, Library, StructDefinition } from '../types';
 
 interface CodeEditorProps {
   value: string;
   onChange: (value: string) => void;
   variables: Variable[];
   libraries?: Library[]; // New prop for DLLs
+  structs?: StructDefinition[]; // Struct definitions for autocomplete
   className?: string;
   isFullscreen?: boolean;
 }
@@ -27,10 +29,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onChange, 
   variables, 
   libraries = [], 
+  structs = [],
   className,
   isFullscreen = false
 }) => {
-  const [suggestion, setSuggestion] = useState<{ type: 'keyword' | 'variable' | 'library', list: string[], left: number, top: number } | null>(null);
+  const [suggestion, setSuggestion] = useState<{ type: 'keyword' | 'variable' | 'library' | 'field', list: string[], left: number, top: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
@@ -69,10 +72,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   const checkSuggestions = (text: string, cursorIndex: number) => {
     const textBefore = text.slice(0, cursorIndex);
-    const lastWordMatch = textBefore.match(/([a-zA-Z0-9_.]+)$/); // Include dot for namespaces
     const lastChar = textBefore.slice(-1);
 
-    // Variable trigger "{"
+    // 1. Variable trigger "{"
     if (lastChar === '{') {
       const coords = getCaretCoordinates(textareaRef.current, cursorIndex);
       setSuggestion({
@@ -84,11 +86,36 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       return;
     }
 
+    // 2. Struct Member Trigger "."
+    // Check if the word BEFORE the dot is a variable that is of a struct type
+    if (lastChar === '.') {
+      const match = textBefore.slice(0, -1).match(/([a-zA-Z0-9_]+)$/);
+      if (match) {
+        const varName = match[1];
+        // Find if this variable exists and matches a struct
+        const variable = variables.find(v => v.name === varName);
+        if (variable) {
+          const structDef = structs.find(s => s.name === variable.type);
+          if (structDef && structDef.fields.length > 0) {
+             const coords = getCaretCoordinates(textareaRef.current, cursorIndex);
+             setSuggestion({
+               type: 'field',
+               list: structDef.fields.map(f => f.name),
+               left: coords.left,
+               top: coords.top + 20
+             });
+             return;
+          }
+        }
+      }
+    }
+
+    // 3. Keywords / Libraries
+    const lastWordMatch = textBefore.match(/([a-zA-Z0-9_.]+)$/); // Include dot for namespaces
     if (lastWordMatch) {
       const word = lastWordMatch[1];
       
       // Check for Library Namespaces / Methods
-      // Logic: if word contains dot, check if it matches a library namespace
       if (word.includes('.')) {
          const parts = word.split('.');
          const potentialNamespace = parts.slice(0, -1).join('.');
@@ -158,6 +185,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     if (suggestion?.type === 'variable') {
       newText = textBefore + item + "}" + text.slice(cursor);
       newCursor = cursor + item.length + 1;
+    } else if (suggestion?.type === 'field') {
+      // Just append the field name
+      newText = textBefore + item + text.slice(cursor);
+      newCursor = cursor + item.length;
     } else {
        const lastWordMatch = textBefore.match(/([a-zA-Z0-9_.]+)$/);
        if (lastWordMatch) {
@@ -246,7 +277,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           style={{ left: Math.min(suggestion.left, 400), top: suggestion.top }}
         >
           <div className="px-2 py-1 text-[10px] bg-slate-700 text-slate-400 uppercase font-bold tracking-wider">
-            {suggestion.type === 'variable' ? '变量' : suggestion.type === 'library' ? '外部库' : '关键字'}
+            {suggestion.type === 'variable' ? '变量' : suggestion.type === 'library' ? '外部库' : suggestion.type === 'field' ? '成员' : '关键字'}
           </div>
           {suggestion.list.map((item, idx) => (
              <button 
@@ -256,6 +287,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
              >
                {suggestion.type === 'variable' && <span className="text-amber-400">{`{}`}</span>}
                {suggestion.type === 'library' && <span className="text-purple-400">ƒ</span>}
+               {suggestion.type === 'field' && <span className="text-cyan-400">.</span>}
                <span>{item}</span>
              </button>
           ))}

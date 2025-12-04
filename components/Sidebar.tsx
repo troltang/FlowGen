@@ -1,51 +1,86 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { NodeType } from '../types';
-import { Play, Square, GitFork, Sparkles, StopCircle, GripVertical, Code2, Clock, Terminal, Box, ChevronLeft, ChevronRight, GripHorizontal, ChevronDown } from 'lucide-react';
+import { Play, Square, GitFork, Sparkles, StopCircle, GripVertical, Code2, Clock, Terminal, Box, ChevronLeft, ChevronRight, GripHorizontal, ChevronDown, Globe, Database, Repeat, Workflow } from 'lucide-react';
+import { useTranslation } from '../utils/i18n';
 
-// Tool Group Configuration
-const TOOLS = [
-  {
-    id: 'flow',
-    label: '流程控制',
-    items: [
-      { type: NodeType.START, label: '开始', icon: Play, color: 'emerald' },
-      { type: NodeType.END, label: '结束', icon: StopCircle, color: 'red' },
-      { type: NodeType.DECISION, label: '判断', icon: GitFork, color: 'amber' },
-      { type: NodeType.GROUP, label: '节点组', icon: Box, color: 'indigo' },
-    ]
-  },
-  {
-    id: 'logic',
-    label: '逻辑 & 动作',
-    items: [
-      { type: NodeType.PROCESS, label: '处理', icon: Square, color: 'blue' },
-      { type: NodeType.CODE, label: 'C# 代码', icon: Code2, color: 'slate' },
-      { type: NodeType.DELAY, label: '延时', icon: Clock, color: 'orange' },
-    ]
-  },
-  {
-    id: 'advanced',
-    label: '高级功能',
-    items: [
-      { type: NodeType.AI_TASK, label: 'AI 生成', icon: Sparkles, color: 'purple' },
-      { type: NodeType.LOG, label: '日志打印', icon: Terminal, color: 'gray' },
-    ]
-  }
-];
+interface DraggableItemProps {
+  type: NodeType;
+  label: string;
+  icon: React.ElementType;
+  color: string;
+  isCollapsed: boolean;
+  onDragStart: (event: React.DragEvent, nodeType: NodeType, label: string) => void;
+}
+
+const DraggableItem: React.FC<DraggableItemProps> = ({ type, label, icon: Icon, color, isCollapsed, onDragStart }) => (
+  <div
+    className={`flex items-center p-2 mb-2 bg-white rounded-md border border-slate-200 shadow-sm cursor-move hover:shadow hover:border-${color}-400 transition-all group overflow-hidden ${isCollapsed ? 'justify-center' : ''}`}
+    onDragStart={(event) => onDragStart(event, type, label)}
+    draggable
+    title={isCollapsed ? label : undefined}
+  >
+    {/* Hide drag grip in collapsed mode to save space */}
+    {!isCollapsed && (
+      <GripVertical className="w-3.5 h-3.5 text-slate-300 mr-2 group-hover:text-slate-500 shrink-0" />
+    )}
+    <div className={`p-1.5 rounded bg-${color}-50 ${isCollapsed ? '' : 'mr-2'} shrink-0`}>
+      <Icon className={`w-4 h-4 text-${color}-600`} />
+    </div>
+    <div className={`text-xs font-medium text-slate-700 whitespace-nowrap transition-all duration-200 ${isCollapsed ? 'opacity-0 w-0 hidden' : 'opacity-100'}`}>
+      {label}
+    </div>
+  </div>
+);
 
 export const Sidebar = () => {
+  const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [position, setPosition] = useState({ x: 20, y: 80 });
   const [isDragging, setIsDragging] = useState(false);
+  // Default all groups to CLOSED
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    flow: true,
-    logic: true,
-    advanced: true
+    'flow': true,
+    'logic': true, 
+    'advanced': true
   });
   
   const dragRef = useRef<HTMLDivElement>(null);
 
-  // Dragging logic
+  const TOOLS = [
+    {
+      id: 'flow',
+      label: t('group.flow'),
+      items: [
+        { type: NodeType.START, label: t('node.start'), icon: Play, color: 'emerald' },
+        { type: NodeType.END, label: t('node.end'), icon: StopCircle, color: 'red' },
+        { type: NodeType.DECISION, label: t('node.decision'), icon: GitFork, color: 'amber' },
+        { type: NodeType.LOOP, label: t('node.loop'), icon: Repeat, color: 'lime' },
+        { type: NodeType.SUB_FLOW, label: t('node.subflow'), icon: Workflow, color: 'teal' },
+        { type: NodeType.GROUP, label: t('node.group'), icon: Box, color: 'indigo' },
+      ]
+    },
+    {
+      id: 'logic',
+      label: t('group.logic'),
+      items: [
+        { type: NodeType.PROCESS, label: t('node.process'), icon: Square, color: 'blue' },
+        { type: NodeType.CODE, label: t('node.code'), icon: Code2, color: 'slate' },
+        { type: NodeType.DELAY, label: t('node.delay'), icon: Clock, color: 'orange' },
+        { type: NodeType.HTTP, label: t('node.http'), icon: Globe, color: 'cyan' },
+        { type: NodeType.DB, label: t('node.db'), icon: Database, color: 'pink' },
+      ]
+    },
+    {
+      id: 'advanced',
+      label: t('group.advanced'),
+      items: [
+        { type: NodeType.AI_TASK, label: t('node.aiTask'), icon: Sparkles, color: 'purple' },
+        { type: NodeType.LOG, label: t('node.log'), icon: Terminal, color: 'gray' },
+      ]
+    }
+  ];
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (isDragging) {
@@ -80,44 +115,28 @@ export const Sidebar = () => {
     setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const DraggableItem = ({ type, label, icon: Icon, color }: { type: NodeType; label: string; icon: React.ElementType; color: string }) => (
-    <div
-      className={`flex items-center p-2 mb-2 bg-white rounded-md border border-slate-200 shadow-sm cursor-move hover:shadow hover:border-${color}-400 transition-all group`}
-      onDragStart={(event) => onDragStart(event, type, label)}
-      draggable
-    >
-      <GripVertical className="w-3.5 h-3.5 text-slate-300 mr-2 group-hover:text-slate-500" />
-      <div className={`p-1.5 rounded bg-${color}-50 mr-2`}>
-        <Icon className={`w-4 h-4 text-${color}-600`} />
-      </div>
-      {!isCollapsed && <div className="text-xs font-medium text-slate-700">{label}</div>}
-    </div>
-  );
-
   return (
     <aside 
-      className={`absolute z-40 bg-white/95 backdrop-blur shadow-xl border border-slate-200 rounded-xl transition-all duration-200 flex flex-col select-none ${isCollapsed ? 'w-16' : 'w-48'}`}
+      className={`absolute z-40 bg-white/95 backdrop-blur shadow-xl border border-slate-200 rounded-xl transition-all duration-300 flex flex-col select-none ${isCollapsed ? 'w-16' : 'w-48'}`}
       style={{ left: position.x, top: position.y, maxHeight: 'calc(100vh - 150px)' }}
     >
       {/* Drag Handle */}
       <div 
         ref={dragRef}
-        className="h-6 bg-slate-100 rounded-t-xl cursor-move flex items-center justify-center border-b border-slate-200 hover:bg-slate-200 transition-colors"
+        className="h-6 bg-slate-100 rounded-t-xl cursor-move flex items-center justify-center border-b border-slate-200 hover:bg-slate-200 transition-colors shrink-0"
         onMouseDown={() => setIsDragging(true)}
       >
         <GripHorizontal className="w-8 h-4 text-slate-400" />
       </div>
 
-      <div className="p-3 border-b border-slate-100 flex items-center justify-between shrink-0">
-        {!isCollapsed && (
-          <div>
-            <h2 className="font-bold text-slate-800 text-sm">工具箱</h2>
-          </div>
-        )}
+      <div className="p-3 border-b border-slate-100 flex items-center justify-between shrink-0 h-12">
+        <div className={`transition-opacity duration-200 ${isCollapsed ? 'opacity-0 w-0 hidden' : 'opacity-100'}`}>
+          <h2 className="font-bold text-slate-800 text-sm whitespace-nowrap">{t('tools.title')}</h2>
+        </div>
         <button 
           onClick={() => setIsCollapsed(!isCollapsed)}
           className={`p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-indigo-600 transition-colors ${isCollapsed ? 'mx-auto' : ''}`}
-          title={isCollapsed ? "展开工具箱" : "收起工具箱"}
+          title={isCollapsed ? "Expand" : "Collapse"}
         >
           {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
         </button>
@@ -126,23 +145,19 @@ export const Sidebar = () => {
       <div className="flex-1 overflow-y-auto p-3 scrollbar-thin scrollbar-thumb-slate-200">
         {TOOLS.map((group, index) => (
           <div key={group.id} className={index !== 0 ? "mt-4" : ""}>
-            {!isCollapsed ? (
-              <button
-                onClick={() => toggleGroup(group.id)}
-                className="flex items-center justify-between w-full text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 hover:text-indigo-600 transition-colors group"
-              >
-                <span>{group.label}</span>
-                <span className="p-0.5 rounded hover:bg-slate-100 text-slate-300 group-hover:text-indigo-500 transition-colors">
-                  {openGroups[group.id] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                </span>
-              </button>
-            ) : (
-              // Separator in collapsed mode
-              index !== 0 && <div className="w-8 mx-auto h-px bg-slate-100 my-2" />
-            )}
+            <button
+              onClick={() => toggleGroup(group.id)}
+              className={`flex items-center w-full text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 hover:text-indigo-600 transition-colors group ${isCollapsed ? 'justify-center' : 'justify-between'}`}
+              title={isCollapsed ? group.label : undefined}
+            >
+              {!isCollapsed && <span>{group.label}</span>}
+              <span className={`p-0.5 rounded hover:bg-slate-100 text-slate-300 group-hover:text-indigo-500 transition-colors ${isCollapsed ? 'mx-auto' : ''}`}>
+                {openGroups[group.id] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              </span>
+            </button>
 
-            {/* Show items if group is open OR if sidebar is collapsed (always show items in icon mode) */}
-            <div className={`space-y-1 ${!isCollapsed && !openGroups[group.id] ? 'hidden' : ''}`}>
+            {/* Respect openGroups even in collapsed mode */}
+            <div className={`space-y-1 ${!openGroups[group.id] ? 'hidden' : ''}`}>
               {group.items.map(item => (
                 <DraggableItem 
                   key={item.type} 
@@ -150,6 +165,8 @@ export const Sidebar = () => {
                   label={item.label} 
                   icon={item.icon} 
                   color={item.color} 
+                  isCollapsed={isCollapsed}
+                  onDragStart={onDragStart}
                 />
               ))}
             </div>

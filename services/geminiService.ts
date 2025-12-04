@@ -16,12 +16,22 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
       label: n.data.label,
       description: n.data.description || '',
       code: n.data.code || '',
-      duration: n.data.duration
+      duration: n.data.duration,
+      // Include new fields
+      url: n.data.url,
+      method: n.data.method,
+      headers: n.data.headers,
+      httpBody: n.data.httpBody,
+      dbOperation: n.data.dbOperation,
+      connectionString: n.data.connectionString,
+      sql: n.data.sql,
+      loopCondition: n.data.loopCondition
     })),
     edges: edges.map(e => ({
       source: e.source,
       target: e.target,
-      label: e.label || (e.sourceHandle === 'true' ? 'Yes' : e.sourceHandle === 'false' ? 'No' : 'Next')
+      label: e.label || (e.sourceHandle === 'true' ? 'Yes' : e.sourceHandle === 'false' ? 'No' : e.sourceHandle === 'loopBody' ? 'Loop Body' : e.sourceHandle === 'loopEnd' ? 'Loop End' : 'Next'),
+      sourceHandle: e.sourceHandle
     })),
     initialVariables: variables.reduce((acc, v) => ({ ...acc, [v.name]: v.value }), {})
   };
@@ -46,10 +56,22 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
        - If condition is true, follow 'Yes'/'true' edge.
        - If false, follow 'No'/'false' edge.
     7. **Concurrent Branching / Parallel Execution**: 
-       - If a non-decision node has multiple outgoing edges, consider this a parallel fork.
+       - If a non-decision, non-loop node has multiple outgoing edges, consider this a parallel fork.
        - Execute all following branches. You can interleave the logs of these branches or execute them sequentially.
     8. **'aiTask' Nodes**: Perform the generative task.
     9. **'log' Nodes**: Output the message. Replace {varName} with values.
+    10. **'http' Nodes**: Simulate an HTTP request.
+        - Log "Sending [METHOD] request to [URL]".
+        - Substitute {variables} in URL, headers, and body.
+        - Simulate a successful response (200 OK) or a failure if the URL is obviously invalid.
+    11. **'db' Nodes**: Simulate a database operation.
+        - Log "Executing [OPERATION] on DB: [SQL]".
+        - If 'select', log simulated result rows.
+        - Substitute {variables} in the SQL.
+    12. **'loop' Nodes**: Simulate a While/For loop.
+        - Evaluate 'loopCondition' (e.g., "{i} < 5").
+        - If TRUE: Follow edge with sourceHandle='loopBody'. After the body path finishes (reaches a node pointing back or logic ends), re-evaluate condition. (Note: Since graph structure might not explicitly cycle back, just assume standard loop semantics if edge structure allows, or execute body once if linear).
+        - If FALSE: Follow edge with sourceHandle='loopEnd'.
     
     Graph Data:
     ${JSON.stringify(graphRepresentation, null, 2)}
@@ -193,23 +215,23 @@ export const generateFlowFromDescription = async (
     
     **CRITICAL NODE SELECTION RULES (Follow these priority):**
     1. **PRIORITIZE VISUAL NODES**: Use the following node types whenever possible to represent logic:
-       - **'decision'**: For ANY "if/else", "check", "verify", "validate" logic. (e.g., "Is count > 10?", "Is user active?").
-       - **'delay'**: For waiting or pausing. (e.g., "Wait 5 seconds").
-       - **'log'**: For printing messages, debugging, or showing status. (e.g., "Print success message").
-       - **'aiTask'**: For generating content, summarizing, or complex reasoning tasks.
-       - **'process'**: For generic actions or API calls (conceptual).
+       - **'decision'**: For ANY "if/else", "check", "verify", "validate" logic.
+       - **'loop'**: For iterations, "while", "for each" logic.
+       - **'http'**: For API calls, web requests, fetching data.
+       - **'db'**: For database operations, SQL queries.
+       - **'delay'**: For waiting or pausing.
+       - **'log'**: For printing messages.
+       - **'aiTask'**: For generative AI tasks.
+       - **'process'**: For generic actions not covered above.
     
-    2. **MINIMIZE 'code' NODES**: Only use 'code' nodes (C#) for:
-       - Complex arithmetic (e.g., calculating interest rates).
-       - String manipulation that 'decision' or 'log' nodes can't handle.
-       - Data transformation.
-       - **DO NOT** use 'code' for simple logic flow like "if x > y then go here". Use a 'decision' node instead.
+    2. **MINIMIZE 'code' NODES**: Only use 'code' nodes (C#) for complex arithmetic or string manipulation not possible with visual nodes.
 
     Requirements:
-    1. **Nodes**: Generate a list of nodes with unique IDs (e.g., 'gen-[type]-[random]').
+    1. **Nodes**: Generate a list of nodes with unique IDs.
     2. **Edges**: Generate edges to connect these nodes logically.
-       - 'decision' nodes MUST have 'true' and 'false' edges if both paths are needed, or at least one labeled edge.
-    3. **Variables**: Define any new variables required (e.g., 'loopCount', 'userInput').
+       - 'decision': sourceHandle 'true'/'false'.
+       - 'loop': sourceHandle 'loopBody'/'loopEnd'.
+    3. **Variables**: Define any new variables required.
     
     Context:
     - Existing Nodes: ${currentNodes.length}
@@ -237,7 +259,12 @@ export const generateFlowFromDescription = async (
                   label: { type: Type.STRING },
                   description: { type: Type.STRING },
                   code: { type: Type.STRING },
-                  duration: { type: Type.INTEGER }
+                  duration: { type: Type.INTEGER },
+                  url: { type: Type.STRING },
+                  method: { type: Type.STRING },
+                  dbOperation: { type: Type.STRING },
+                  sql: { type: Type.STRING },
+                  loopCondition: { type: Type.STRING }
                 }
               }
             },
@@ -281,7 +308,12 @@ export const generateFlowFromDescription = async (
         label: n.label,
         description: n.description,
         code: n.code,
-        duration: n.duration
+        duration: n.duration,
+        url: n.url,
+        method: n.method,
+        dbOperation: n.dbOperation,
+        sql: n.sql,
+        loopCondition: n.loopCondition
       }
     }));
 

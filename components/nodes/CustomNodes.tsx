@@ -1,6 +1,7 @@
+
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps, NodeResizer } from 'reactflow';
-import { Play, Square, GitFork, Sparkles, StopCircle, Code2, Clock, Terminal, Box, AlertTriangle } from 'lucide-react';
+import { Play, Square, GitFork, Sparkles, StopCircle, Code2, Clock, Terminal, Box, AlertTriangle, Globe, Database, Repeat, Workflow } from 'lucide-react';
 import { FlowNodeData } from '../../types';
 
 // Wrapper for common node styling
@@ -12,7 +13,8 @@ const NodeWrapper = ({
   selected,
   isActive,
   error,
-  minWidth = "min-w-[160px]"
+  minWidth = "min-w-[160px]",
+  width
 }: { 
   children?: React.ReactNode; 
   title: string; 
@@ -22,9 +24,10 @@ const NodeWrapper = ({
   isActive?: boolean;
   error?: string;
   minWidth?: string;
+  width?: string;
 }) => (
   <div className={`
-    shadow-lg rounded-lg border-2 bg-white ${minWidth} transition-all duration-300 relative
+    shadow-lg rounded-lg border-2 bg-white ${width || minWidth} transition-all duration-300 relative
     ${error 
       ? 'border-red-500 ring-2 ring-red-200' 
       : isActive 
@@ -128,7 +131,7 @@ export const CodeNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
       selected={selected} 
       isActive={data.isActive} 
       error={data.error}
-      minWidth="w-[200px]"
+      width="w-[200px]"
     >
       <Handle type="target" position={Position.Top} className="!bg-slate-500 !w-3 !h-3" title="输入: 执行代码" />
       <div className="text-sm text-slate-800 font-mono truncate">{data.label}</div>
@@ -182,5 +185,79 @@ export const GroupNode = memo(({ data, selected, id }: NodeProps<FlowNodeData>) 
         {data.label}
       </div>
     </div>
+  );
+});
+
+export const HttpNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
+  return (
+    <NodeWrapper title="HTTP 请求" colorClass="border-l-4 border-l-cyan-500" icon={Globe} selected={selected} isActive={data.isActive} error={data.error}>
+      <Handle type="target" position={Position.Top} className="!bg-cyan-300 !w-3 !h-3" title="输入: 发送请求" />
+      <div className="text-sm text-slate-800 font-medium">{data.label}</div>
+      <div className="flex items-center gap-1 mt-1">
+        <span className="text-[10px] font-bold bg-cyan-100 text-cyan-700 px-1 rounded">{data.method || 'GET'}</span>
+        <div className="text-[10px] text-slate-500 truncate max-w-[100px]">{data.url || 'http://...'}</div>
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-cyan-500 !w-3 !h-3" title="输出: 请求完成" />
+    </NodeWrapper>
+  );
+});
+
+export const DbNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
+  const getOpColor = (op?: string) => {
+    if(op === 'select') return 'text-blue-600 bg-blue-50';
+    if(op === 'insert') return 'text-green-600 bg-green-50';
+    if(op === 'update') return 'text-amber-600 bg-amber-50';
+    if(op === 'delete') return 'text-red-600 bg-red-50';
+    return 'text-slate-600 bg-slate-50';
+  };
+
+  return (
+    <NodeWrapper title="数据库" colorClass="border-l-4 border-l-pink-500" icon={Database} selected={selected} isActive={data.isActive} error={data.error}>
+      <Handle type="target" position={Position.Top} className="!bg-pink-300 !w-3 !h-3" title="输入: 执行SQL" />
+      <div className="text-sm text-slate-800">{data.label}</div>
+      <div className="mt-1 flex items-center gap-1">
+         <span className={`text-[10px] px-1 rounded font-mono font-bold uppercase ${getOpColor(data.dbOperation)}`}>
+           {data.dbOperation || 'SQL'}
+         </span>
+         <div className="text-[10px] text-slate-400 truncate max-w-[100px]">{data.sql || 'SELECT * ...'}</div>
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-pink-500 !w-3 !h-3" title="输出: 操作完成" />
+    </NodeWrapper>
+  );
+});
+
+export const LoopNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
+  return (
+    <NodeWrapper title="循环" colorClass="border-l-4 border-l-lime-500" icon={Repeat} selected={selected} isActive={data.isActive} error={data.error}>
+      <Handle type="target" position={Position.Top} className="!bg-lime-300 !w-3 !h-3" title="输入: 进入循环" />
+      <div className="text-sm font-medium text-center my-1">{data.label}</div>
+      <div className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded p-1 mb-2 font-mono text-center truncate">
+        {data.loopCondition || 'condition'}
+      </div>
+      
+      <div className="flex justify-between w-full px-1 gap-4">
+        <div className="relative">
+          <span className="absolute -bottom-6 -left-1 text-[10px] font-bold text-lime-600">循环体</span>
+          <Handle type="source" position={Position.Bottom} id="loopBody" className="!bg-lime-500 !w-3 !h-3 !left-2" title="输出: 满足条件 (Loop)" />
+        </div>
+        <div className="relative">
+          <span className="absolute -bottom-6 -right-1 text-[10px] font-bold text-slate-600">结束</span>
+          <Handle type="source" position={Position.Bottom} id="loopEnd" className="!bg-slate-500 !w-3 !h-3 !left-auto !right-2" title="输出: 循环结束 (Done)" />
+        </div>
+      </div>
+    </NodeWrapper>
+  );
+});
+
+export const SubFlowNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
+  return (
+    <NodeWrapper title="子流程" colorClass="border-l-4 border-l-teal-500" icon={Workflow} selected={selected} isActive={data.isActive} error={data.error}>
+      <Handle type="target" position={Position.Top} className="!bg-teal-300 !w-3 !h-3" title="输入: 调用" />
+      <div className="text-sm font-medium text-slate-800">{data.label}</div>
+      <div className="text-xs text-teal-600 bg-teal-50 border border-teal-100 rounded p-1 mt-1 truncate">
+        {data.subFlowId ? `Call: ${data.subFlowId}` : '未选择流程'}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-teal-500 !w-3 !h-3" title="输出: 返回" />
+    </NodeWrapper>
   );
 });

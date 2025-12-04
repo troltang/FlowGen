@@ -2,7 +2,7 @@ import dagre from 'dagre';
 import { Node, Edge, Position } from 'reactflow';
 
 // Default node size if not specified (width, height)
-const DEFAULT_WIDTH = 180;
+const DEFAULT_WIDTH = 200; // Increased to 200 to match CodeNode width
 const DEFAULT_HEIGHT = 80;
 
 /**
@@ -21,7 +21,11 @@ export const getLayoutedElements = (
   dagreGraph.setDefaultEdgeLabel(() => ({}));
 
   const isHorizontal = direction === 'LR';
-  dagreGraph.setGraph({ rankdir: direction });
+  dagreGraph.setGraph({ 
+    rankdir: direction,
+    nodesep: 50, // Increase horizontal spacing
+    ranksep: 60  // Increase vertical spacing
+  });
 
   // Create a set of existing node IDs for safe edge validation
   const nodeIds = new Set(nodes.map(n => n.id));
