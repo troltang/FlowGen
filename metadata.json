@@ -1,0 +1,5 @@
+{
+  "name": "FlowGen AI Builder",
+  "description": "A visual programming environment where you can drag-and-drop nodes to build flowcharts and execute them instantly using the Gemini AI engine.",
+  "requestFramePermissions": []
+}
