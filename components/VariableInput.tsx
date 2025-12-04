@@ -1,12 +1,14 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Variable, SystemKeyword } from '../types';
+import { Variable, SystemKeyword, StructDefinition } from '../types';
 import { SYSTEM_KEYWORDS } from '../constants';
-import { Database, Zap } from 'lucide-react';
+import { Database, Zap, Table } from 'lucide-react';
 
 interface VariableInputProps {
   value: string;
   onChange: (value: string) => void;
   variables: Variable[];
+  structs?: StructDefinition[];
   placeholder?: string;
   className?: string;
   isTextArea?: boolean;
@@ -16,14 +18,17 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   value,
   onChange,
   variables,
+  structs,
   placeholder,
   className,
   isTextArea = false
 }) => {
   const [showVarSuggestions, setShowVarSuggestions] = useState(false);
   const [showSysSuggestions, setShowSysSuggestions] = useState(false);
+  const [showFieldSuggestions, setShowFieldSuggestions] = useState(false);
   const [cursorIndex, setCursorIndex] = useState(0);
   const [filterText, setFilterText] = useState('');
+  const [activeStruct, setActiveStruct] = useState<StructDefinition | null>(null);
   
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -33,6 +38,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setShowVarSuggestions(false);
         setShowSysSuggestions(false);
+        setShowFieldSuggestions(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -56,17 +62,43 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     // 2. System trigger: '@' followed by valid characters at the end
     const sysMatch = textBeforeCursor.match(/@([a-zA-Z0-9_]*)$/);
 
+    // 3. Struct Member trigger: '{varName.' 
+    const dotMatch = textBeforeCursor.match(/\{([a-zA-Z0-9_]+)\.$/);
+    // 4. Struct Member continuing: '{varName.fieldPart'
+    const fieldMatch = textBeforeCursor.match(/\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]*)$/);
+
+    if (dotMatch || fieldMatch) {
+       const varName = dotMatch ? dotMatch[1] : (fieldMatch ? fieldMatch[1] : '');
+       const filter = fieldMatch ? fieldMatch[2] : '';
+       
+       const variable = variables.find(v => v.name === varName);
+       if (variable && structs) {
+           const structDef = structs.find(s => s.name === variable.type);
+           if (structDef) {
+               setActiveStruct(structDef);
+               setFilterText(filter);
+               setShowFieldSuggestions(true);
+               setShowVarSuggestions(false);
+               setShowSysSuggestions(false);
+               return;
+           }
+       }
+    }
+
     if (varMatch) {
       setFilterText(varMatch[1]);
       setShowVarSuggestions(true);
       setShowSysSuggestions(false);
+      setShowFieldSuggestions(false);
     } else if (sysMatch) {
       setFilterText(sysMatch[1]);
       setShowSysSuggestions(true);
       setShowVarSuggestions(false);
+      setShowFieldSuggestions(false);
     } else {
       setShowVarSuggestions(false);
       setShowSysSuggestions(false);
+      setShowFieldSuggestions(false);
       setFilterText('');
     }
   };
@@ -75,24 +107,21 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     setCursorIndex(e.currentTarget.selectionStart || 0);
   };
 
-  const insertText = (text: string, isVariable: boolean) => {
+  const insertText = (text: string, type: 'variable' | 'system' | 'field') => {
     const textBefore = value.slice(0, cursorIndex);
     const textAfter = value.slice(cursorIndex);
     
     let newTextBefore = textBefore;
 
-    if (isVariable) {
-      // Replace the last occurrence of '{filter' with '{text}'
+    if (type === 'variable') {
       const match = textBefore.match(/\{([a-zA-Z0-9_]*)$/);
       if (match) {
         const matchLength = match[0].length;
-        // Remove the partial trigger and text
         newTextBefore = textBefore.slice(0, -matchLength) + `{${text}}`;
       } else {
         newTextBefore = textBefore + `{${text}}`;
       }
-    } else {
-      // System keyword replacement
+    } else if (type === 'system') {
       const match = textBefore.match(/@([a-zA-Z0-9_]*)$/);
       if (match) {
         const matchLength = match[0].length;
@@ -100,6 +129,14 @@ export const VariableInput: React.FC<VariableInputProps> = ({
       } else {
         newTextBefore = textBefore + text;
       }
+    } else if (type === 'field') {
+        // Struct field insertion: {var.field}
+        const match = textBefore.match(/\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]*)$/);
+        if (match) {
+            const fullMatch = match[0]; // {var.partial
+            const varName = match[1];
+            newTextBefore = textBefore.slice(0, -fullMatch.length) + `{${varName}.${text}}`;
+        }
     }
     
     const newValue = newTextBefore + textAfter;
@@ -107,6 +144,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     onChange(newValue);
     setShowVarSuggestions(false);
     setShowSysSuggestions(false);
+    setShowFieldSuggestions(false);
     
     setTimeout(() => {
       if (inputRef.current) {
@@ -127,6 +165,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     k.label.includes(filterText) ||
     k.value.toLowerCase().includes(filterText.toLowerCase())
   );
+
+  const filteredFields = activeStruct?.fields.filter(f => 
+    f.name.toLowerCase().includes(filterText.toLowerCase())
+  ) || [];
 
   const InputComponent = isTextArea ? 'textarea' : 'input';
 
@@ -152,6 +194,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             e.preventDefault(); 
             setShowSysSuggestions(!showSysSuggestions);
             setShowVarSuggestions(false);
+            setShowFieldSuggestions(false);
             setFilterText('');
           }}
           className="text-slate-400 hover:text-pink-500 transition-colors p-1"
@@ -165,6 +208,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             e.preventDefault();
             setShowVarSuggestions(!showVarSuggestions);
             setShowSysSuggestions(false);
+            setShowFieldSuggestions(false);
             setFilterText('');
           }}
           className="text-slate-400 hover:text-indigo-600 transition-colors p-1"
@@ -187,7 +231,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                <button
                  key={v.id}
                  type="button"
-                 onMouseDown={(e) => { e.preventDefault(); insertText(v.name, true); }}
+                 onMouseDown={(e) => { e.preventDefault(); insertText(v.name, 'variable'); }}
                  className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 flex items-center justify-between group transition-colors"
                >
                  <span className="font-mono text-indigo-700 font-medium flex items-center gap-2">
@@ -217,13 +261,43 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                <button
                  key={k.value}
                  type="button"
-                 onMouseDown={(e) => { e.preventDefault(); insertText(k.value, false); }}
+                 onMouseDown={(e) => { e.preventDefault(); insertText(k.value, 'system'); }}
                  className="w-full text-left px-3 py-2 text-sm hover:bg-pink-50 flex items-center justify-between group transition-colors"
                >
                  <span className="font-mono text-pink-600 font-medium">
                    {k.value}
                  </span>
                  <span className="text-xs text-slate-400">{k.label}</span>
+               </button>
+             ))
+           )}
+        </div>
+      )}
+
+      {/* Struct Field Suggestions */}
+      {showFieldSuggestions && activeStruct && (
+        <div className="absolute z-50 left-0 w-full mt-1 bg-white rounded-lg shadow-xl border border-slate-200 max-h-60 overflow-y-auto animate-in fade-in zoom-in-95 duration-100 ring-1 ring-slate-900/5">
+           <div className="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-100 sticky top-0 z-10 flex justify-between items-center">
+             <span>成员: {activeStruct.name}</span>
+             {filterText && <span className="font-normal text-slate-400">({filterText})</span>}
+           </div>
+           {filteredFields.length === 0 ? (
+             <div className="p-3 text-xs text-slate-400 text-center">无匹配成员</div>
+           ) : (
+             filteredFields.map((f, idx) => (
+               <button
+                 key={idx}
+                 type="button"
+                 onMouseDown={(e) => { e.preventDefault(); insertText(f.name, 'field'); }}
+                 className="w-full text-left px-3 py-2 text-sm hover:bg-cyan-50 flex items-center justify-between group transition-colors"
+               >
+                 <span className="font-mono text-cyan-700 font-medium flex items-center gap-2">
+                   <Table className="w-3 h-3 opacity-50" />
+                   {f.name}
+                 </span>
+                 <span className="text-xs text-slate-400 group-hover:text-cyan-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                   {f.type}
+                 </span>
                </button>
              ))
            )}

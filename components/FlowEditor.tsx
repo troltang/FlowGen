@@ -191,6 +191,64 @@ const FlowEditorInner = () => {
       setShowReferencePanel(true);
   };
 
+  const handleRun = async () => {
+    if (isRunning) return;
+    setIsRunning(true);
+    setLogs([{
+      step: 0,
+      nodeId: 'system',
+      nodeLabel: 'System',
+      message: '开始执行流程...',
+      status: 'info',
+      timestamp: new Date().toISOString()
+    }]);
+
+    // Combine global and local variables
+    const currentFlow = flows[activeFlowId];
+    const allVariables = [...projectVariables, ...currentFlow.variables];
+
+    try {
+      const result = await executeFlowWithGemini(nodes, edges, allVariables);
+      setLogs(prev => [...prev, ...result.logs]);
+      
+      if (result.success) {
+         setLogs(prev => [...prev, {
+            step: 999,
+            nodeId: 'system',
+            nodeLabel: 'System',
+            message: `流程执行成功完成。结果: ${result.finalOutput || '无输出'}`,
+            status: 'success',
+            timestamp: new Date().toISOString()
+         }]);
+      } else {
+         // If gemini returns success: false but no logs?
+         if (!result.logs.some(l => l.status === 'error')) {
+             setLogs(prev => [...prev, {
+                step: 999,
+                nodeId: 'system',
+                nodeLabel: 'System',
+                message: '流程执行结束 (Status: Failed).',
+                status: 'error',
+                timestamp: new Date().toISOString()
+             }]);
+         }
+      }
+
+    } catch (e) {
+      console.error(e);
+      setLogs(prev => [...prev, {
+        step: 0,
+        nodeId: 'system',
+        nodeLabel: 'System',
+        message: '执行过程中发生异常: ' + (e instanceof Error ? e.message : String(e)),
+        status: 'error',
+        timestamp: new Date().toISOString()
+      }]);
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
   // Compiler Logic
   const handleCompile = () => {
     saveCurrentFlowState();
@@ -397,7 +455,7 @@ const FlowEditorInner = () => {
 
         <div className="flex-1 flex flex-col relative h-full">
           <TopBar 
-            onRun={() => { /* existing run logic */ }} 
+            onRun={handleRun} 
             isRunning={isRunning} 
             canUndo={past.length > 0}
             canRedo={future.length > 0}
