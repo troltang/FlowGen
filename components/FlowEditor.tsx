@@ -189,7 +189,7 @@ const FlowEditorInner = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Helpers
-  const t = (key: string) => translations[lang][key] || key;
+  const t = (key: string) => (translations[lang] as Record<string, string>)[key] || key;
 
   // Sync ReactFlow state back to Flows store
   const saveCurrentFlowState = useCallback((targetFlowId: string) => {
@@ -665,8 +665,8 @@ namespace Project.Functions
           onAddCodeFile={handleAddCodeFile}
           onDeleteCodeFile={handleDeleteCodeFile}
           onRenameCodeFile={handleRenameCodeFile}
-          onOpenTab={handleOpenTab}
           onFindCodeReferences={(id) => handleFindReferences(id, 'code')}
+          onOpenTab={handleOpenTab}
         />
         
         <div className="flex-1 flex flex-col relative h-full">

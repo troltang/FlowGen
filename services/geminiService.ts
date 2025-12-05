@@ -1,4 +1,6 @@
 
+declare const process: any;
+
 import { AppNode, ExecutionResult, ExecutionLog, Variable, GeneratedFlowData, NodeType, CodeFile } from '../types';
 import { Edge } from 'reactflow';
 
