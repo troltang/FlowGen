@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { X, GripHorizontal, ArrowDownRight, Minus } from 'lucide-react';
 
@@ -28,14 +29,33 @@ export const DraggablePanel: React.FC<DraggablePanelProps> = ({
   zIndex = 50,
   onInteract
 }) => {
-  // Safe initial positioning logic to keep panel within viewport
+  // Safe initial positioning logic with smart flip and clamping
   const getSafePosition = (pos: { x: number, y: number }, w: number, h: number) => {
-    const maxX = window.innerWidth - w;
-    const maxY = window.innerHeight - h;
-    return {
-      x: Math.min(Math.max(0, pos.x), maxX > 0 ? maxX : 0),
-      y: Math.min(Math.max(0, pos.y), maxY > 0 ? maxY : 0)
-    };
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let x = pos.x;
+    let y = pos.y;
+
+    // Smart Positioning:
+    // If opening at x makes it go off the right edge, try flipping to the left of the click point
+    if (x + w > vw) {
+        x = x - w;
+        // If flipping left also puts it off screen (unlikely for typical mouse usage but possible), 
+        // rely on clamping below.
+    }
+
+    // If opening down makes it go off bottom edge, push it up
+    if (y + h > vh) {
+        y = vh - h - 20; // 20px padding from bottom
+    }
+
+    // Hard Clamping (Padding ensures title bar is always accessible)
+    const padding = 10;
+    x = Math.max(padding, Math.min(x, vw - w - padding));
+    y = Math.max(padding, Math.min(y, vh - h - padding));
+
+    return { x, y };
   };
 
   const [size, setSize] = useState(initialSize);

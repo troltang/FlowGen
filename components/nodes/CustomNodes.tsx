@@ -1,7 +1,7 @@
 
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps, NodeResizer } from 'reactflow';
-import { Play, Square, GitFork, Sparkles, StopCircle, Code2, Clock, Terminal, Box, AlertTriangle, Globe, Database, Repeat, Workflow } from 'lucide-react';
+import { Play, Square, GitFork, Sparkles, StopCircle, Code2, Clock, Terminal, Box, AlertTriangle, Globe, Database, Repeat, Workflow, FileJson } from 'lucide-react';
 import { FlowNodeData } from '../../types';
 
 // Wrapper for common node styling
@@ -95,7 +95,7 @@ export const AITaskNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => 
       <div className="text-sm text-slate-800 font-medium bg-purple-50 p-2 rounded border border-purple-100 mb-1">
         {data.label}
       </div>
-      <div className="text-xs text-slate-500 italic">Gemini 2.5 Flash</div>
+      <div className="text-xs text-slate-500 italic">GLM-4 Flash</div>
       <Handle type="source" position={Position.Bottom} className="!bg-purple-500 !w-3 !h-3" title="输出: 任务完成" />
     </NodeWrapper>
   );
@@ -144,6 +144,45 @@ export const CodeNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
         <div className="absolute top-0 right-0 h-full w-4 bg-gradient-to-l from-slate-100 to-transparent pointer-events-none" />
       </div>
       <Handle type="source" position={Position.Bottom} className="!bg-slate-700 !w-3 !h-3" title="输出: 执行完毕" />
+    </NodeWrapper>
+  );
+});
+
+export const FunctionCallNode = memo(({ data, selected }: NodeProps<FlowNodeData>) => {
+  return (
+    <NodeWrapper 
+      title="函数调用" 
+      colorClass="border-l-4 border-l-rose-500" 
+      icon={FileJson} 
+      selected={selected} 
+      isActive={data.isActive} 
+      error={data.error}
+      width="w-[220px]"
+    >
+      <Handle type="target" position={Position.Top} className="!bg-rose-300 !w-3 !h-3" title="输入: 调用" />
+      <div className="text-sm font-bold text-slate-800 truncate mb-1">{data.label}</div>
+      <div className="flex flex-col gap-1">
+        {data.functionName ? (
+          <div className="flex items-center gap-1 bg-rose-50 border border-rose-100 px-1.5 py-1 rounded">
+             <span className="text-[10px] font-mono font-bold text-rose-600">Fn:</span>
+             <span className="text-[10px] font-mono text-slate-600 truncate">{data.functionName}</span>
+          </div>
+        ) : (
+          <div className="text-[10px] text-slate-400 italic">未配置函数</div>
+        )}
+        {data.parameterValues && Object.keys(data.parameterValues).length > 0 && (
+           <div className="text-[9px] text-slate-500 mt-0.5 px-1 truncate">
+             Params: {Object.keys(data.parameterValues).join(', ')}
+           </div>
+        )}
+        {data.variableName && (
+           <div className="flex items-center gap-1 text-[9px] text-slate-500 px-1 mt-0.5">
+             <span>Return &rarr;</span>
+             <span className="font-mono bg-slate-100 px-1 rounded text-indigo-600">{data.variableName}</span>
+           </div>
+        )}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-rose-500 !w-3 !h-3" title="输出: 返回" />
     </NodeWrapper>
   );
 });

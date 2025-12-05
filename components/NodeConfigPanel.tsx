@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { AppNode, NodeType, Variable, Library, FlowData, StructDefinition } from '../types';
-import { Copy, Settings2, CheckCircle2, AlertCircle, FileCode, ChevronDown, Maximize2, Minimize2, Workflow, ArrowRightLeft } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { AppNode, NodeType, Variable, Library, FlowData, StructDefinition, CodeFile, FunctionDefinition } from '../types';
+import { Copy, Settings2, CheckCircle2, AlertCircle, FileCode, ChevronDown, Maximize2, Minimize2, Workflow, ArrowRightLeft, Wrench, FileJson, Search, BookOpen } from 'lucide-react';
 import { VariableInput } from './VariableInput';
 import { DraggablePanel } from './DraggablePanel';
 import { CodeEditor } from './CodeEditor';
@@ -14,6 +14,7 @@ interface NodeConfigPanelProps {
   variables: Variable[];
   libraries?: Library[];
   structs?: StructDefinition[];
+  codeFiles?: CodeFile[];
   zIndex?: number;
   onInteract?: () => void;
   initialPosition?: { x: number; y: number };
@@ -29,6 +30,44 @@ const CODE_TEMPLATES = [
   { label: 'JSON 处理', description: '模拟 JSON 数据提取', value: '// 假定 input 是 JSON 字符串\n// dynamic data = JsonConvert.DeserializeObject(input);\nreturn "processed_json";' }
 ];
 
+// Helper to map C# types to Flow types
+const mapCSharpTypeToFlowType = (csType: string): string => {
+    switch (csType) {
+        case 'int':
+        case 'float':
+        case 'double':
+        case 'decimal':
+        case 'long':
+        case 'short':
+        case 'byte':
+            return 'number';
+        case 'string':
+            return 'string';
+        case 'bool':
+            return 'boolean';
+        case 'DateTime':
+            return 'datetime';
+        case 'object':
+        case 'dynamic':
+            return 'object';
+        default:
+            return 'object'; // Fallback
+    }
+};
+
+const checkTypeCompatibility = (varType: string, expectedType: string): boolean => {
+    if (varType === expectedType) return true;
+    const numberTypes = ['number', 'integer', 'float'];
+    // Allow any number type to match 'number'
+    if (expectedType === 'number' && numberTypes.includes(varType)) return true;
+    if (numberTypes.includes(expectedType) && varType === 'number') return true;
+    
+    // Object/Any compatibility
+    if (expectedType === 'object' || varType === 'object') return true; 
+    
+    return false;
+};
+
 export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({ 
   node, 
   onClose, 
@@ -36,6 +75,7 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
   variables,
   libraries = [],
   structs = [],
+  codeFiles = [],
   zIndex,
   onInteract,
   initialPosition,
@@ -48,7 +88,7 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
   const [duration, setDuration] = useState(1000);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showFullscreenEditor, setShowFullscreenEditor] = useState(false);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationResult, setValidationResult] = useState<{ isValid: boolean, message?: string, suggestion?: string, targetVar?: string } | null>(null);
 
   // New state fields
   const [url, setUrl] = useState('');
@@ -60,6 +100,13 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
   const [sql, setSql] = useState('');
   const [loopCondition, setLoopCondition] = useState('');
   const [subFlowId, setSubFlowId] = useState('');
+  
+  // Function Call States
+  const [selectedCodeFileId, setSelectedCodeFileId] = useState('');
+  const [selectedFunctionName, setSelectedFunctionName] = useState('');
+  const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
+  const [variableName, setVariableName] = useState(''); // Store return value here
+  const [showFunctionSelector, setShowFunctionSelector] = useState(false);
 
   useEffect(() => {
     if (node) {
@@ -78,9 +125,34 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
       setSql(node.data.sql || '');
       setLoopCondition(node.data.loopCondition || '');
       setSubFlowId(node.data.subFlowId || '');
-      setValidationError(node.data.error || null);
+      
+      // Function Call
+      setSelectedCodeFileId(node.data.codeFileId || '');
+      setSelectedFunctionName(node.data.functionName || '');
+      setParameterValues(node.data.parameterValues || {});
+      setVariableName(node.data.variableName || '');
+
+      setValidationResult(node.data.error ? { isValid: false, message: node.data.error } : null);
     }
   }, [node]);
+
+  // Handle Function Call logic
+  const selectedCodeFile = codeFiles.find(f => f.id === selectedCodeFileId);
+  const selectedFunction = selectedCodeFile?.functions.find(f => f.name === selectedFunctionName);
+
+  // Function Selector logic
+  const functionSelectorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+          if (functionSelectorRef.current && !functionSelectorRef.current.contains(event.target as Node)) {
+              setShowFunctionSelector(false);
+          }
+      };
+      if (showFunctionSelector) {
+          document.addEventListener('mousedown', handleClickOutside);
+      }
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showFunctionSelector]);
 
   // Detect used variables in the current configuration
   const usedVariables = useMemo(() => {
@@ -93,6 +165,14 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         matches.forEach(m => vars.add(m.slice(1, -1)));
       }
     });
+    
+    // For function parameters
+    if (node?.type === NodeType.FUNCTION_CALL && parameterValues) {
+        Object.values(parameterValues).forEach(val => {
+            const matches = val.match(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g);
+            if (matches) matches.forEach(m => vars.add(m.slice(1, -1)));
+        });
+    }
     
     // For code, simple check if var name exists as whole word
     if (node?.type === NodeType.CODE && code) {
@@ -118,52 +198,104 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         type: v?.type ?? 'unknown'
       };
     });
-  }, [label, description, code, loopCondition, node?.type, variables]);
+  }, [label, description, code, loopCondition, node?.type, variables, parameterValues]);
 
-  // Validation logic for decision and loop expressions
-  const validateExpression = (text: string) => {
+  const validateExpression = (text: string): { isValid: boolean, message?: string, suggestion?: string, targetVar?: string } | null => {
     if (!text) return null;
     
-    const varMatches = [...text.matchAll(/\{([a-zA-Z0-9_]+)\}/g)];
-    if (varMatches.length < 1) return null;
-
-    // Check for mix of String and Number in comparison
-    if (text.match(/>|<|>=|<=|-|\*|\//)) {
-       for (const m of varMatches) {
-          const vName = m[1];
-          const v = variables.find(v => v.name === vName);
-          if (v && v.type === 'string') {
-             // Basic heuristic: check if it looks like a cast is present
-             const isCast = new RegExp(`(int|double|float|Convert\\.\\w+|Parse)\\s*\\(\\s*\\{${vName}\\}\\s*\\)`).test(text);
-             if (!isCast) {
-               return `类型警告: 变量 '${vName}' 是字符串，但进行了数值运算。请使用 int({${vName}}) 或 Convert.ToInt32({${vName}}) 进行转换。`;
-             }
-          }
-       }
-    }
-    
-    // Check equality for mixed types
-    if (text.match(/==|!=/) && varMatches.length >= 2) {
-       // Rough check: look at first two vars
-       const v1 = variables.find(v => v.name === varMatches[0][1]);
-       const v2 = variables.find(v => v.name === varMatches[1][1]);
-       if (v1 && v2 && v1.type !== v2.type) {
-           return `类型警告: 正在比较不同类型的变量 (${v1.type} vs ${v2.type})。请确保类型一致。`;
-       }
+    // 0. Assignment check (Did user type = instead of == ?)
+    // Match {var} = {var} or {var} = "val" but NOT ==, !=, >=, <=
+    const assignmentRegex = /\{([a-zA-Z0-9_]+)\}\s*=(?!=)\s*(?:\{([a-zA-Z0-9_]+)\}|[^=])/;
+    if (assignmentRegex.test(text)) {
+        return {
+            isValid: false,
+            message: "检测到赋值操作 '='。在判断条件中请使用 '==' 进行比较。",
+            suggestion: text.replace(/([^=])=([^=])/g, '$1==$2')
+        };
     }
 
+    // 1. Binary Type Mismatch Check (Loop through all comparisons)
+    // Regex for {var} op {var}
+    const binaryRegex = /\{([a-zA-Z0-9_]+)\}\s*(==|!=|===|!==|>|<|>=|<=)\s*\{([a-zA-Z0-9_]+)\}/g;
+    let match;
+    while ((match = binaryRegex.exec(text)) !== null) {
+      const v1Name = match[1];
+      const operator = match[2];
+      const v2Name = match[3];
+      const v1 = variables.find(v => v.name === v1Name);
+      const v2 = variables.find(v => v.name === v2Name);
+      
+      if (v1 && v2 && !checkTypeCompatibility(v1.type, v2.type)) {
+         return {
+             isValid: false,
+             message: `类型不匹配: 无法比较 ${v1.type} '{${v1Name}}' 和 ${v2.type} '{${v2Name}}'。`,
+             suggestion: undefined,
+             targetVar: undefined
+         };
+      }
+    }
+
+    // 2. Single boolean check
+    const singleVarRegex = /^\s*\{([a-zA-Z0-9_]+)\}\s*$/;
+    const singleMatch = text.match(singleVarRegex);
+    if (singleMatch) {
+        const vName = singleMatch[1];
+        const v = variables.find(va => va.name === vName);
+        if (v && v.type !== 'boolean') {
+             let suggestion = '';
+             if (v.type === 'string') suggestion = `!string.IsNullOrEmpty({${vName}})`;
+             else if (v.type === 'number' || v.type === 'integer' || v.type === 'float') suggestion = `{${vName}} != 0`;
+             else suggestion = `{${vName}} != null`;
+
+             return {
+                 isValid: false,
+                 message: `类型错误: 条件必须是布尔值。变量 '{${vName}}' 是 ${v.type} 类型。`,
+                 suggestion: suggestion,
+                 targetVar: vName
+             };
+        }
+    }
     return null;
   };
 
+  // Function Parameter Validation
+  const validateFunctionParams = (): string | null => {
+      if (!selectedFunction) return null;
+      for (const param of selectedFunction.parameters) {
+          const val = parameterValues[param.name];
+          if (!val) continue; // Allow empty? Or strict check for non-optional?
+          
+          const match = val.match(/^\{([a-zA-Z0-9_]+)\}$/);
+          if (match) {
+              const varName = match[1];
+              const variable = variables.find(v => v.name === varName);
+              if (variable) {
+                  const expectedFlowType = mapCSharpTypeToFlowType(param.type);
+                  if (!checkTypeCompatibility(variable.type, expectedFlowType)) {
+                      return `参数 '${param.name}' 类型错误: 需要 ${expectedFlowType} (C# ${param.type}), 但变量 '{${variable.name}}' 是 ${variable.type}。`;
+                  }
+              }
+          }
+      }
+      return null;
+  };
+
   useEffect(() => {
+    let result: { isValid: boolean, message?: string } | null = null;
+
     if (node?.type === NodeType.DECISION) {
-        setValidationError(validateExpression(description));
+        result = validateExpression(description);
     } else if (node?.type === NodeType.LOOP) {
-        setValidationError(validateExpression(loopCondition));
-    } else {
-        setValidationError(null);
+        result = validateExpression(loopCondition);
+    } else if (node?.type === NodeType.FUNCTION_CALL) {
+        const paramError = validateFunctionParams();
+        if (paramError) {
+            result = { isValid: false, message: paramError };
+        }
     }
-  }, [description, loopCondition, node?.type, variables]);
+    
+    setValidationResult(result);
+  }, [description, loopCondition, node?.type, variables, parameterValues, selectedFunction]);
 
   if (!node) return null;
 
@@ -182,14 +314,93 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
       sql,
       loopCondition,
       subFlowId,
-      error: validationError || undefined
+      // Function Call
+      codeFileId: selectedCodeFileId,
+      functionName: selectedFunctionName,
+      parameterValues: parameterValues,
+      variableName: variableName,
+      
+      error: validationResult?.isValid === false ? validationResult.message : undefined
     });
     onClose();
+  };
+
+  const applyFix = () => {
+      if (!validationResult || !validationResult.suggestion) return;
+      const replacement = validationResult.suggestion;
+      
+      if (node.type === NodeType.DECISION) {
+          setDescription(replacement);
+      } else if (node.type === NodeType.LOOP) {
+          setLoopCondition(replacement);
+      }
   };
 
   const getTypeLabel = (type?: string) => {
     return t(`node.${type}`) || type;
   };
+
+  const renderFunctionSelector = () => (
+      <div className="relative">
+          <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+              调用函数 <span className="text-red-500">*</span>
+          </label>
+          <button 
+              onClick={() => setShowFunctionSelector(!showFunctionSelector)}
+              className="w-full flex items-center justify-between px-3 py-2 border border-slate-300 rounded-lg bg-white hover:border-indigo-400 focus:ring-2 focus:ring-indigo-500 transition-all text-left"
+          >
+              <div className="flex flex-col overflow-hidden">
+                  <span className={`text-sm font-medium truncate ${selectedFunction ? 'text-slate-800' : 'text-slate-400 italic'}`}>
+                      {selectedFunction ? selectedFunction.name : '选择目标函数...'}
+                  </span>
+                  {selectedCodeFile && (
+                      <span className="text-[10px] text-slate-400 truncate">
+                          {selectedCodeFile.name}
+                      </span>
+                  )}
+              </div>
+              <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+          </button>
+
+          {showFunctionSelector && (
+              <div ref={functionSelectorRef} className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
+                  {codeFiles.length === 0 ? (
+                      <div className="p-3 text-xs text-slate-400 text-center italic">暂无可用代码文件</div>
+                  ) : (
+                      codeFiles.map(file => (
+                          <div key={file.id} className="border-b border-slate-50 last:border-0">
+                              <div className="px-3 py-1.5 bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 sticky top-0">
+                                  <FileCode className="w-3 h-3" />
+                                  {file.name}
+                              </div>
+                              {file.functions.length === 0 ? (
+                                  <div className="px-3 py-2 text-xs text-slate-300 italic">无公共方法</div>
+                              ) : (
+                                  file.functions.map(func => (
+                                      <button
+                                          key={func.name}
+                                          onClick={() => {
+                                              setSelectedCodeFileId(file.id);
+                                              setSelectedFunctionName(func.name);
+                                              setParameterValues({});
+                                              setShowFunctionSelector(false);
+                                          }}
+                                          className={`w-full text-left px-4 py-2 text-sm hover:bg-indigo-50 flex items-center justify-between group transition-colors ${selectedCodeFileId === file.id && selectedFunctionName === func.name ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'}`}
+                                      >
+                                          <span className="font-mono">{func.name}</span>
+                                          <span className="text-[10px] text-slate-400 bg-white border border-slate-200 px-1.5 py-0.5 rounded group-hover:border-indigo-200">
+                                              {func.returnType}
+                                          </span>
+                                      </button>
+                                  ))
+                              )}
+                          </div>
+                      ))
+                  )}
+              </div>
+          )}
+      </div>
+  );
 
   return (
     <>
@@ -230,14 +441,125 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
             </div>
 
             {/* Validation Error Banner */}
-            {validationError && (
-                <div className="bg-amber-50 border border-amber-200 rounded p-2 flex items-start gap-2 text-xs text-amber-700 animate-in fade-in slide-in-from-top-2">
-                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <div>
-                        <div className="font-bold">配置检查</div>
-                        {validationError}
+            {validationResult && validationResult.isValid === false && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex flex-col gap-2 animate-in fade-in slide-in-from-top-2 shadow-sm">
+                    <div className="flex items-start gap-2 text-xs text-red-700">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div className="font-bold">校验错误</div>
                     </div>
+                    <div className="text-xs text-red-600 pl-6 leading-relaxed">
+                        {validationResult.message}
+                    </div>
+                    {validationResult.suggestion && (
+                        <div className="pl-6 mt-1 flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500">建议修改为:</span>
+                            <code className="text-[10px] bg-white px-1.5 py-0.5 rounded border border-red-100 font-mono text-red-600">{validationResult.suggestion}</code>
+                            <button 
+                                onClick={applyFix}
+                                className="ml-auto flex items-center gap-1 bg-red-600 text-white px-2 py-1 rounded text-[10px] font-bold hover:bg-red-700 transition-colors shadow-sm active:scale-95"
+                            >
+                                <Wrench className="w-3 h-3" />
+                                自动修复
+                            </button>
+                        </div>
+                    )}
                 </div>
+            )}
+
+            {/* Function Call Config */}
+            {node.type === NodeType.FUNCTION_CALL && (
+              <div className="space-y-4">
+                {/* Compact Function Selector */}
+                {renderFunctionSelector()}
+
+                {/* Function Documentation */}
+                {selectedFunction && (
+                    <div className="bg-blue-50 border border-blue-100 rounded p-3 text-xs text-slate-600">
+                        <div className="flex items-center gap-1 font-bold text-blue-700 mb-1">
+                            <BookOpen className="w-3 h-3" />
+                            文档说明
+                        </div>
+                        <div className="italic">
+                            {selectedFunction.description || "该函数暂无描述文档。"}
+                        </div>
+                        <div className="mt-2 pt-2 border-t border-blue-100 flex gap-4">
+                            <div>
+                                <span className="text-[10px] text-slate-400 uppercase">Return</span>
+                                <div className="font-mono text-blue-600">{selectedFunction.returnType}</div>
+                            </div>
+                            <div>
+                                <span className="text-[10px] text-slate-400 uppercase">Params</span>
+                                <div className="font-mono text-slate-700">{selectedFunction.parameters.length}</div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Parameters */}
+                {selectedFunction && selectedFunction.parameters.length > 0 && (
+                  <div className="bg-slate-50 p-3 rounded border border-slate-200">
+                    <label className="block text-xs font-bold text-slate-600 mb-2 border-b border-slate-200 pb-1">
+                      {t('config.func.params')}
+                    </label>
+                    <div className="space-y-3">
+                      {selectedFunction.parameters.map(param => {
+                        // Check type compatibility inline for visual feedback
+                        const currentVal = parameterValues[param.name] || '';
+                        const varMatch = currentVal.match(/^\{([a-zA-Z0-9_]+)\}$/);
+                        let typeError = null;
+                        if (varMatch) {
+                            const v = variables.find(va => va.name === varMatch[1]);
+                            if (v) {
+                                const expected = mapCSharpTypeToFlowType(param.type);
+                                if (!checkTypeCompatibility(v.type, expected)) {
+                                    typeError = `Type mismatch: ${v.type} ≠ ${expected} (${param.type})`;
+                                }
+                            }
+                        }
+
+                        return (
+                        <div key={param.name}>
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-xs font-medium text-slate-700 font-mono">{param.name}</span>
+                            <span className="text-[10px] text-slate-400 bg-white px-1 rounded border border-slate-200">{param.type}</span>
+                          </div>
+                          <VariableInput
+                            value={currentVal}
+                            onChange={(val) => setParameterValues(prev => ({ ...prev, [param.name]: val }))}
+                            variables={variables}
+                            structs={structs}
+                            placeholder={`Value for ${param.name}`}
+                            className={`w-full px-2 py-1.5 border rounded focus:ring-1 focus:ring-indigo-500 outline-none text-sm bg-white ${typeError ? 'border-red-300' : 'border-slate-300'}`}
+                          />
+                          {typeError && (
+                              <div className="text-[10px] text-red-500 mt-0.5">{typeError}</div>
+                          )}
+                        </div>
+                      )})}
+                    </div>
+                  </div>
+                )}
+
+                {/* Return Value Variable */}
+                {selectedFunction && selectedFunction.returnType !== 'void' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                      {t('config.func.return')}
+                    </label>
+                    <VariableInput
+                      value={variableName}
+                      onChange={setVariableName}
+                      variables={variables}
+                      structs={structs}
+                      placeholder="e.g. resultVar"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono text-indigo-700"
+                    />
+                    <div className="mt-1 text-[10px] text-slate-400">
+                      Result will be stored in this variable (Global or Local).
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* SubFlow Config */}
@@ -372,7 +694,7 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
                   variables={variables}
                   structs={structs}
                   placeholder="e.g. {i} < 10"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono"
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono ${validationResult?.isValid === false ? 'border-red-300 focus:ring-red-200' : 'border-slate-300'}`}
                 />
               </div>
             )}
@@ -466,7 +788,7 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
                     variables={variables}
                     structs={structs}
                     placeholder={node.type === NodeType.AI_TASK ? "描述AI需要做什么..." : node.type === NodeType.DECISION ? "例如: {count} > 5" : "描述此步骤的功能..."}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm min-h-[100px] resize-none transition-all"
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm min-h-[100px] resize-none transition-all ${validationResult?.isValid === false ? 'border-red-300 focus:ring-red-200' : 'border-slate-300'}`}
                  />
                  {node.type === NodeType.DECISION && (
                    <p className="text-[10px] text-slate-400 mt-1">支持变量比较，如 <code>{`{variable} > 10`}</code>。请注意类型一致性。</p>

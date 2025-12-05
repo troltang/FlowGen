@@ -14,7 +14,8 @@ export enum NodeType {
   HTTP = 'http',
   DB = 'db',
   LOOP = 'loop',
-  SUB_FLOW = 'subflow'
+  SUB_FLOW = 'subflow',
+  FUNCTION_CALL = 'functionCall'
 }
 
 export type VariableType = 
@@ -48,19 +49,65 @@ export interface Variable {
   isGlobal?: boolean;
 }
 
+// --- DLL / Library Types ---
+
 export interface LibraryMethod {
   name: string;
   returnType: string;
+  parameters: { name: string; type: string }[];
   description?: string;
-  parameters: string[];
+  isStatic?: boolean;
+}
+
+export interface LibraryProperty {
+  name: string;
+  type: string;
+  description?: string;
+}
+
+export interface LibraryClass {
+  name: string;
+  description?: string;
+  methods: LibraryMethod[];
+  properties: LibraryProperty[];
+}
+
+export interface LibraryNamespace {
+  name: string;
+  classes: LibraryClass[];
 }
 
 export interface Library {
   id: string;
-  name: string; 
-  namespace: string; 
-  methods: LibraryMethod[];
+  name: string; // filename.dll
+  namespaces: LibraryNamespace[];
+  uploadDate: string;
 }
+
+// --- Code Function Types ---
+
+export interface FunctionParameter {
+  name: string;
+  type: string;
+}
+
+export interface FunctionDefinition {
+  name: string;
+  returnType: string;
+  parameters: FunctionParameter[];
+  description?: string; // Extracted from comments
+}
+
+export interface CodeFile {
+  id: string;
+  name: string;
+  content: string;
+  functions: FunctionDefinition[];
+  updatedAt: string;
+  refs?: string[]; // IDs of referenced CodeFiles
+}
+
+// ---------------------------
 
 export interface FlowNodeData {
   label: string;
@@ -88,6 +135,11 @@ export interface FlowNodeData {
 
   // Sub Flow Data
   subFlowId?: string;
+
+  // Function Call Data
+  codeFileId?: string;
+  functionName?: string;
+  parameterValues?: Record<string, string>; // paramName -> variable expression or value
 }
 
 export type AppNode = Node<FlowNodeData>;

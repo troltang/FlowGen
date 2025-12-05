@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Variable, Library, StructDefinition } from '../types';
+import { Box, Code, Variable as VarIcon, Type, Braces } from 'lucide-react';
 
 interface CodeEditorProps {
   value: string;
@@ -10,6 +11,7 @@ interface CodeEditorProps {
   structs?: StructDefinition[]; // Struct definitions for autocomplete
   className?: string;
   isFullscreen?: boolean;
+  onCursorChange?: (index: number) => void;
 }
 
 const CSHARP_KEYWORDS = [
@@ -21,7 +23,7 @@ const CSHARP_KEYWORDS = [
   'private', 'protected', 'public', 'readonly', 'ref', 'return', 'sbyte', 'sealed', 'short',
   'sizeof', 'stackalloc', 'static', 'string', 'struct', 'switch', 'this', 'throw', 'true',
   'try', 'typeof', 'uint', 'ulong', 'unchecked', 'unsafe', 'ushort', 'using', 'virtual',
-  'void', 'volatile', 'while', 'var'
+  'void', 'volatile', 'while', 'var', 'dynamic', 'async', 'await'
 ];
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({ 
@@ -31,11 +33,15 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   libraries = [], 
   structs = [],
   className,
-  isFullscreen = false
+  isFullscreen = false,
+  onCursorChange
 }) => {
   const [suggestion, setSuggestion] = useState<{ type: 'keyword' | 'variable' | 'library' | 'field', list: string[], left: number, top: number } | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const suggestionRef = useRef<HTMLDivElement>(null);
 
   const handleScroll = () => {
     if (textareaRef.current && backdropRef.current) {
@@ -46,27 +52,72 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
+    const pos = e.target.selectionStart;
     onChange(val);
-    checkSuggestions(val, e.target.selectionStart);
+    checkSuggestions(val, pos);
+    if (onCursorChange) onCursorChange(pos);
   };
+
+  const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+      if (onCursorChange) {
+          onCursorChange(e.currentTarget.selectionStart);
+      }
+  };
+
+  // Reset selection index when suggestion list changes
+  useEffect(() => {
+    if (suggestion) {
+        setSelectedIndex(0);
+    }
+  }, [suggestion?.list]);
+
+  // Scroll to selected item
+  useEffect(() => {
+      if (suggestion && suggestionRef.current) {
+          const activeItem = suggestionRef.current.children[selectedIndex] as HTMLElement;
+          if (activeItem) {
+              activeItem.scrollIntoView({ block: 'nearest' });
+          }
+      }
+  }, [selectedIndex, suggestion]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Tab') {
       e.preventDefault();
-      const start = e.currentTarget.selectionStart;
-      const end = e.currentTarget.selectionEnd;
-      const val = e.currentTarget.value;
-      onChange(val.substring(0, start) + '  ' + val.substring(end));
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 2;
+      if (suggestion) {
+          applySuggestion(suggestion.list[selectedIndex]);
+      } else {
+          const start = e.currentTarget.selectionStart;
+          const end = e.currentTarget.selectionEnd;
+          const val = e.currentTarget.value;
+          onChange(val.substring(0, start) + '  ' + val.substring(end));
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 2;
+              if(onCursorChange) onCursorChange(start + 2);
+            }
+          }, 0);
+      }
+    } else if (e.key === 'ArrowUp') {
+        if (suggestion) {
+            e.preventDefault();
+            setSelectedIndex(prev => (prev - 1 + suggestion.list.length) % suggestion.list.length);
         }
-      }, 0);
-    } else if (e.key === 'Enter' && suggestion) {
-       e.preventDefault();
-       applySuggestion(suggestion.list[0]);
+    } else if (e.key === 'ArrowDown') {
+        if (suggestion) {
+            e.preventDefault();
+            setSelectedIndex(prev => (prev + 1) % suggestion.list.length);
+        }
+    } else if (e.key === 'Enter') {
+       if (suggestion) {
+           e.preventDefault();
+           applySuggestion(suggestion.list[selectedIndex]);
+       }
     } else if (e.key === 'Escape') {
-      setSuggestion(null);
+      if (suggestion) {
+          e.preventDefault();
+          setSuggestion(null);
+      }
     }
   };
 
@@ -86,14 +137,14 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       return;
     }
 
-    // 2. Struct Member Trigger "."
-    // Check if the word BEFORE the dot is a variable that is of a struct type
+    // 2. Member Trigger "." (Structs or Libraries)
     if (lastChar === '.') {
       const match = textBefore.slice(0, -1).match(/([a-zA-Z0-9_]+)$/);
       if (match) {
-        const varName = match[1];
-        // Find if this variable exists and matches a struct
-        const variable = variables.find(v => v.name === varName);
+        const tokenName = match[1];
+        
+        // A. Check Variables (Structs)
+        const variable = variables.find(v => v.name === tokenName);
         if (variable) {
           const structDef = structs.find(s => s.name === variable.type);
           if (structDef && structDef.fields.length > 0) {
@@ -107,61 +158,58 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
              return;
           }
         }
+
+        // B. Check Libraries (Namespaces / Classes)
+        let libSuggestions: string[] = [];
+        
+        for (const lib of libraries) {
+            for (const ns of lib.namespaces) {
+                // If token matches namespace, suggest classes
+                if (ns.name === tokenName) {
+                    libSuggestions = ns.classes.map(c => c.name);
+                    break;
+                }
+                // If token matches class, suggest methods
+                const cls = ns.classes.find(c => c.name === tokenName);
+                if (cls) {
+                    libSuggestions = cls.methods.map(m => m.name);
+                    break;
+                }
+            }
+            if (libSuggestions.length > 0) break;
+        }
+
+        if (libSuggestions.length > 0) {
+            const coords = getCaretCoordinates(textareaRef.current, cursorIndex);
+            setSuggestion({
+                type: 'library',
+                list: libSuggestions,
+                left: coords.left,
+                top: coords.top + 20
+            });
+            return;
+        }
       }
     }
 
-    // 3. Keywords / Libraries
-    const lastWordMatch = textBefore.match(/([a-zA-Z0-9_.]+)$/); // Include dot for namespaces
+    // 3. Keywords / Library Namespaces (Autocomplete while typing word)
+    const lastWordMatch = textBefore.match(/([a-zA-Z0-9_]+)$/); 
     if (lastWordMatch) {
       const word = lastWordMatch[1];
       
-      // Check for Library Namespaces / Methods
-      if (word.includes('.')) {
-         const parts = word.split('.');
-         const potentialNamespace = parts.slice(0, -1).join('.');
-         const trigger = parts[parts.length - 1];
-         
-         const matchingLib = libraries.find(l => l.namespace === potentialNamespace || l.name.replace('.dll', '') === potentialNamespace);
-         
-         if (matchingLib) {
-            const methods = matchingLib.methods
-              .map(m => m.name)
-              .filter(m => m.toLowerCase().startsWith(trigger.toLowerCase()));
-            
-            if (methods.length > 0) {
-               const coords = getCaretCoordinates(textareaRef.current, cursorIndex);
-               setSuggestion({
-                 type: 'library',
-                 list: methods,
-                 left: coords.left,
-                 top: coords.top + 20
-               });
-               return;
-            }
-         }
-      }
-
-      // Check Libraries root names
-      const libNames = libraries.map(l => l.namespace.split('.')[0]).filter(n => n.toLowerCase().startsWith(word.toLowerCase()));
-      if (libNames.length > 0) {
-         const coords = getCaretCoordinates(textareaRef.current, cursorIndex);
-         setSuggestion({
-           type: 'library',
-           list: libNames,
-           left: coords.left,
-           top: coords.top + 20
-         });
-         return;
-      }
-
-      // Check Keywords
-      if (word.length >= 2 && !word.includes('.')) {
-        const matches = CSHARP_KEYWORDS.filter(k => k.startsWith(word) && k !== word);
+      // Combine keywords and library namespaces (flattened)
+      const libNamespaces = libraries.flatMap(l => l.namespaces.map(ns => ns.name));
+      const allCandidates = [...libNamespaces, ...CSHARP_KEYWORDS];
+      
+      if (word.length >= 1) {
+        const matches = allCandidates.filter(k => k.toLowerCase().startsWith(word.toLowerCase()) && k !== word);
         if (matches.length > 0) {
           const coords = getCaretCoordinates(textareaRef.current, cursorIndex);
+          // Determine type based on what matched first
+          const isLib = libNamespaces.includes(matches[0]);
           setSuggestion({
-            type: 'keyword',
-            list: matches.slice(0, 5),
+            type: isLib ? 'library' : 'keyword',
+            list: matches.slice(0, 8), // Limit to 8 suggestions
             left: coords.left,
             top: coords.top + 20
           });
@@ -185,24 +233,21 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     if (suggestion?.type === 'variable') {
       newText = textBefore + item + "}" + text.slice(cursor);
       newCursor = cursor + item.length + 1;
-    } else if (suggestion?.type === 'field') {
-      // Just append the field name
+    } else if (suggestion?.type === 'field' || (suggestion?.type === 'library' && textBefore.endsWith('.'))) {
+      // Just append the name (it was triggered by dot)
       newText = textBefore + item + text.slice(cursor);
       newCursor = cursor + item.length;
     } else {
-       const lastWordMatch = textBefore.match(/([a-zA-Z0-9_.]+)$/);
+       // Replacing a partial word
+       const lastWordMatch = textBefore.match(/([a-zA-Z0-9_]+)$/);
        if (lastWordMatch) {
          const word = lastWordMatch[1];
-         // If it's a library method property access (has dot), only replace after the dot
-         if (word.includes('.')) {
-            const lastDotIndex = word.lastIndexOf('.');
-            const partialMethod = word.substring(lastDotIndex + 1);
-            newText = textBefore.slice(0, -partialMethod.length) + item + (suggestion?.type === 'library' && !item.includes('(') ? '(' : '') + text.slice(cursor);
-            newCursor = cursor - partialMethod.length + item.length + (suggestion?.type === 'library' ? 1 : 0);
-         } else {
-            newText = textBefore.slice(0, -word.length) + item + text.slice(cursor);
-            newCursor = cursor - word.length + item.length;
-         }
+         newText = textBefore.slice(0, -word.length) + item + text.slice(cursor);
+         newCursor = cursor - word.length + item.length;
+       } else {
+         // Should not happen based on checkSuggestions logic but safe fallback
+         newText = textBefore + item + text.slice(cursor);
+         newCursor = cursor + item.length;
        }
     }
 
@@ -212,6 +257,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       if (textareaRef.current) {
         textareaRef.current.focus();
         textareaRef.current.setSelectionRange(newCursor, newCursor);
+        if(onCursorChange) onCursorChange(newCursor);
       }
     }, 0);
   };
@@ -221,8 +267,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
     const escape = (str: string) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-    // Gather library namespaces for highlighting
-    const libNamespaces = libraries.map(l => l.namespace);
+    // Gather library namespaces for highlighting (flattened)
+    const libNamespaces = libraries.flatMap(l => l.namespaces.map(ns => ns.name));
     
     const combinedRegex = new RegExp([
       `"(?:\\\\.|[^"\\\\])*"`, // Strings
@@ -247,20 +293,32 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     }).join('');
   };
 
+  const getIcon = (type: string) => {
+      switch(type) {
+          case 'variable': return <VarIcon className="w-3 h-3 text-amber-400" />;
+          case 'library': return <Box className="w-3 h-3 text-purple-400" />;
+          case 'field': return <Type className="w-3 h-3 text-cyan-400" />;
+          default: return <Code className="w-3 h-3 text-blue-400" />;
+      }
+  };
+
   return (
-    <div className={`relative ${className} bg-slate-900 rounded-lg overflow-hidden border border-slate-700 flex flex-col`}>
-      <div className="relative flex-1 overflow-hidden">
-        {/* Backdrop for highlighting - added overflow-auto to ensure it behaves similarly to textarea */}
+    <div className={`relative ${className} bg-slate-900 rounded-lg overflow-hidden border border-slate-700 flex flex-col min-h-0`}>
+      <div className="relative flex-1 overflow-hidden min-h-0">
+        {/* Backdrop for highlighting */}
         <div 
           ref={backdropRef}
-          className={`absolute inset-0 pointer-events-none p-3 whitespace-pre-wrap font-mono ${isFullscreen ? 'text-base' : 'text-sm'} leading-6 break-words text-slate-200 overflow-auto scrollbar-hide pb-10`}
+          className={`absolute inset-0 pointer-events-none p-3 whitespace-pre-wrap font-mono ${isFullscreen ? 'text-base' : 'text-sm'} leading-6 break-words text-slate-200 overflow-auto scrollbar-hide pb-10 h-full w-full`}
           dangerouslySetInnerHTML={{ __html: highlightCode(value) + '<br/>' }}
         />
-        {/* Textarea for input - added padding-bottom to ensure last line visibility */}
+        {/* Textarea for input */}
         <textarea
           ref={textareaRef}
           value={value}
           onChange={handleInput}
+          onSelect={handleSelect}
+          onClick={handleSelect}
+          onKeyUp={handleSelect}
           onKeyDown={handleKeyDown}
           onScroll={handleScroll}
           onBlur={() => setTimeout(() => setSuggestion(null), 200)}
@@ -273,22 +331,32 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       {/* Suggestions Popup */}
       {suggestion && (
         <div 
-          className="absolute z-50 bg-slate-800 border border-slate-600 rounded shadow-xl flex flex-col min-w-[150px] max-h-[200px] overflow-y-auto"
+          ref={suggestionRef}
+          className="absolute z-50 bg-slate-800 border border-slate-600 rounded-md shadow-2xl flex flex-col min-w-[180px] max-h-[200px] overflow-y-auto ring-1 ring-black/20"
           style={{ left: Math.min(suggestion.left, 400), top: suggestion.top }}
         >
-          <div className="px-2 py-1 text-[10px] bg-slate-700 text-slate-400 uppercase font-bold tracking-wider">
-            {suggestion.type === 'variable' ? '变量' : suggestion.type === 'library' ? '外部库' : suggestion.type === 'field' ? '成员' : '关键字'}
+          <div className="px-2 py-1.5 text-[10px] bg-slate-850 text-slate-500 uppercase font-bold tracking-wider border-b border-slate-700 flex justify-between">
+            <span>
+                {suggestion.type === 'variable' ? 'Variables' : 
+                 suggestion.type === 'library' ? 'Library' : 
+                 suggestion.type === 'field' ? 'Members' : 'Keywords'}
+            </span>
+            <span className="text-[9px] opacity-60">⇅ Select  ↲ Enter</span>
           </div>
           {suggestion.list.map((item, idx) => (
              <button 
                key={idx}
                onMouseDown={(e) => { e.preventDefault(); applySuggestion(item); }}
-               className="px-2 py-1.5 text-xs text-left text-slate-200 hover:bg-indigo-600 font-mono border-b border-slate-700/50 last:border-0 flex items-center gap-2"
+               className={`
+                 px-3 py-1.5 text-xs text-left font-mono border-b border-slate-700/50 last:border-0 flex items-center gap-2 transition-colors
+                 ${idx === selectedIndex ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}
+               `}
              >
-               {suggestion.type === 'variable' && <span className="text-amber-400">{`{}`}</span>}
-               {suggestion.type === 'library' && <span className="text-purple-400">ƒ</span>}
-               {suggestion.type === 'field' && <span className="text-cyan-400">.</span>}
+               {getIcon(suggestion.type)}
+               {suggestion.type === 'variable' && <span className="text-amber-400 opacity-70">{`{`}</span>}
+               {suggestion.type === 'field' && <span className="text-cyan-400 opacity-70">.</span>}
                <span>{item}</span>
+               {suggestion.type === 'variable' && <span className="text-amber-400 opacity-70">{`}`}</span>}
              </button>
           ))}
         </div>
@@ -297,7 +365,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       {/* Basic Error Checking Indicator */}
       {(value.split('{').length !== value.split('}').length || value.split('(').length !== value.split(')').length) && (
         <div className="absolute bottom-2 right-2 text-[10px] text-red-400 flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded border border-red-500/30 pointer-events-none">
-           ⚠️ 括号不匹配
+           <Braces className="w-3 h-3" />
+           括号不匹配
         </div>
       )}
     </div>
@@ -312,7 +381,7 @@ const getCaretCoordinates = (element: HTMLTextAreaElement | null, position: numb
   const currentLineIndex = textLines.length - 1;
   const currentLineText = textLines[currentLineIndex];
   
-  // Rough estimation, improved by using a canvas measurement if needed, but this works for monospace
+  // Rough estimation
   const charWidth = 8.5; 
   const lineHeight = 24;
 

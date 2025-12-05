@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { NodeType } from '../types';
-import { Play, Square, GitFork, Sparkles, StopCircle, GripVertical, Code2, Clock, Terminal, Box, ChevronLeft, ChevronRight, GripHorizontal, ChevronDown, Globe, Database, Repeat, Workflow } from 'lucide-react';
+import { Play, Square, GitFork, Sparkles, StopCircle, GripVertical, Code2, Clock, Terminal, Box, ChevronLeft, ChevronRight, GripHorizontal, ChevronDown, Globe, Database, Repeat, Workflow, FileJson } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
 
 interface DraggableItemProps {
@@ -33,7 +33,11 @@ const DraggableItem: React.FC<DraggableItemProps> = ({ type, label, icon: Icon, 
   </div>
 );
 
-export const Sidebar = () => {
+interface SidebarProps {
+  isRunning?: boolean;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ isRunning }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [position, setPosition] = useState({ x: 20, y: 80 });
@@ -66,6 +70,7 @@ export const Sidebar = () => {
       items: [
         { type: NodeType.PROCESS, label: t('node.process'), icon: Square, color: 'blue' },
         { type: NodeType.CODE, label: t('node.code'), icon: Code2, color: 'slate' },
+        { type: NodeType.FUNCTION_CALL, label: t('node.functionCall'), icon: FileJson, color: 'rose' },
         { type: NodeType.DELAY, label: t('node.delay'), icon: Clock, color: 'orange' },
         { type: NodeType.HTTP, label: t('node.http'), icon: Globe, color: 'cyan' },
         { type: NodeType.DB, label: t('node.db'), icon: Database, color: 'pink' },
@@ -117,8 +122,15 @@ export const Sidebar = () => {
 
   return (
     <aside 
-      className={`absolute z-40 bg-white/95 backdrop-blur shadow-xl border border-slate-200 rounded-xl transition-all duration-300 flex flex-col select-none ${isCollapsed ? 'w-16' : 'w-48'}`}
-      style={{ left: position.x, top: position.y, maxHeight: 'calc(100vh - 150px)' }}
+      className={`absolute z-40 bg-white/95 backdrop-blur shadow-xl border border-slate-200 rounded-xl transition-all duration-500 ease-in-out flex flex-col select-none ${isCollapsed ? 'w-16' : 'w-48'}`}
+      style={{ 
+        left: position.x, 
+        top: position.y, 
+        maxHeight: 'calc(100vh - 150px)',
+        transform: isRunning ? 'translateX(-300px)' : 'translateX(0)',
+        opacity: isRunning ? 0 : 1,
+        pointerEvents: isRunning ? 'none' : 'auto'
+      }}
     >
       {/* Drag Handle */}
       <div 

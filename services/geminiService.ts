@@ -1,12 +1,76 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import { AppNode, ExecutionResult, ExecutionLog, Variable, GeneratedFlowData, NodeType } from '../types';
+
+import { AppNode, ExecutionResult, ExecutionLog, Variable, GeneratedFlowData, NodeType, CodeFile } from '../types';
 import { Edge } from 'reactflow';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Configuration for Zhipu AI
+// 🔴 在线预览专用：请将您的 智谱AI API Key 粘贴在下方引号中 (例如 "abc.123...")
+const HARDCODED_API_KEY = "6d8bc1ebfab049a2bed2df171765642f.H8ftaUxjRIcbxYsp"; 
 
-export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], variables: Variable[]): Promise<ExecutionResult> => {
+const API_KEY = HARDCODED_API_KEY || process.env.API_KEY;
+const API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+// Using glm-4-flash for high speed and low cost (economic choice)
+const MODEL_NAME = "glm-4-flash"; 
+
+const callZhipuAI = async (messages: any[], jsonMode: boolean = true) => {
+  const apiKey = API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key 未配置 (process.env.API_KEY is missing)");
+  }
+
+  const payload = {
+    model: MODEL_NAME,
+    messages: messages,
+    stream: false,
+    temperature: 0.1,
+    top_p: 0.7,
+    // Zhipu doesn't strictly enforce JSON via a parameter like 'response_format' in all SDK versions,
+    // but glm-4-flash adheres well to system instructions. 
+    // We strictly instruct it in the prompt.
+  };
+
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error("API Rate Limit Exceeded (429)");
+    }
+    const errorText = await response.text();
+    throw new Error(`Zhipu AI API Error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  
+  if (!content) {
+    throw new Error("API returned empty content");
+  }
+
+  return content;
+};
+
+// Retry helper
+const retryWithBackoff = async <T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries > 0 && (error.message?.includes('429') || error.message?.includes('503'))) {
+      console.warn(`API Rate limited/Server Error. Retrying in ${delay}ms... (${retries} attempts left)`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryWithBackoff(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
+
+export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], variables: Variable[], codeFiles: CodeFile[] = []): Promise<ExecutionResult> => {
   // Serialize the graph for the LLM
-  // We filter out Group nodes from logic execution as they are visual only
   const logicNodes = nodes.filter(n => n.type !== 'group');
   
   const graphRepresentation = {
@@ -17,7 +81,6 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
       description: n.data.description || '',
       code: n.data.code || '',
       duration: n.data.duration,
-      // Include new fields
       url: n.data.url,
       method: n.data.method,
       headers: n.data.headers,
@@ -25,7 +88,11 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
       dbOperation: n.data.dbOperation,
       connectionString: n.data.connectionString,
       sql: n.data.sql,
-      loopCondition: n.data.loopCondition
+      loopCondition: n.data.loopCondition,
+      functionName: n.data.functionName,
+      codeFileId: n.data.codeFileId,
+      parameterValues: n.data.parameterValues,
+      variableName: n.data.variableName
     })),
     edges: edges.map(e => ({
       source: e.source,
@@ -36,9 +103,18 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
     initialVariables: variables.reduce((acc, v) => ({ ...acc, [v.name]: v.value }), {})
   };
 
-  const prompt = `
+  const codeContext = codeFiles.map(f => `
+    File ID: ${f.id}
+    File Name: ${f.name}
+    Content:
+    \`\`\`csharp
+    ${f.content}
+    \`\`\`
+  `).join('\n');
+
+  const systemPrompt = `
     You are a sophisticated flowchart execution engine with C# code simulation capabilities.
-    I will provide you with a JSON representation of a flowchart and initial variable states.
+    I will provide you with a JSON representation of a flowchart, initial variable states, and a set of C# code files.
     
     Your task is to simulate the execution of this flowchart step-by-step.
     
@@ -70,78 +146,60 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
         - Substitute {variables} in the SQL.
     12. **'loop' Nodes**: Simulate a While/For loop.
         - Evaluate 'loopCondition' (e.g., "{i} < 5").
-        - If TRUE: Follow edge with sourceHandle='loopBody'. After the body path finishes (reaches a node pointing back or logic ends), re-evaluate condition. (Note: Since graph structure might not explicitly cycle back, just assume standard loop semantics if edge structure allows, or execute body once if linear).
+        - If TRUE: Follow edge with sourceHandle='loopBody'. After the body path finishes (reaches a node pointing back or logic ends), re-evaluate condition.
         - If FALSE: Follow edge with sourceHandle='loopEnd'.
+    13. **'functionCall' Nodes**:
+        - Locate the function in the provided "Code Files" using 'codeFileId' and 'functionName'.
+        - Map 'parameterValues' to the function arguments. Evaluate any {variables} in the values.
+        - Simulate the execution of the C# function.
+        - The C# function may reference other classes/functions defined in other Code Files. Assume all Code Files are in the same assembly/project.
+        - If 'variableName' (Output Variable) is set, store the return value of the function into that variable in the global state.
+        - Log "Calling function [Name] with params [...]".
     
+    IMPORTANT: You MUST return a VALID JSON object. Do not include markdown formatting (like \`\`\`json).
+    
+    Output JSON Schema:
+    {
+      "logs": [
+        { "step": number, "nodeId": "string", "nodeLabel": "string", "message": "string (in Chinese Simplified)", "status": "info" | "success" | "warning" | "error", "timestamp": "string" }
+      ],
+      "finalOutput": "string",
+      "finalVariables": [
+        { "name": "string", "value": "string", "type": "string" }
+      ],
+      "success": boolean
+    }
+  `;
+
+  const userPrompt = `
     Graph Data:
     ${JSON.stringify(graphRepresentation, null, 2)}
-    
-    Return JSON format adhering to this schema.
-    - 'logs': Array of steps. 'status' must be 'info', 'success', 'warning', or 'error'.
-    - 'finalOutput': Result of the last operation.
-    - 'finalVariables': Array of objects { name, value, type } representing the final state of all variables.
-    
-    IMPORTANT: The 'message' in logs should be in Chinese (Simplified).
+
+    Code Files (Context):
+    ${codeContext}
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            logs: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  step: { type: Type.INTEGER },
-                  nodeId: { type: Type.STRING },
-                  nodeLabel: { type: Type.STRING },
-                  message: { type: Type.STRING },
-                  status: { type: Type.STRING, enum: ['info', 'success', 'warning', 'error'] },
-                  timestamp: { type: Type.STRING }
-                }
-              }
-            },
-            finalOutput: { type: Type.STRING },
-            finalVariables: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  value: { type: Type.STRING },
-                  type: { type: Type.STRING }
-                }
-              }
-            },
-            success: { type: Type.BOOLEAN }
-          }
-        }
-      }
-    });
+    const jsonString = await retryWithBackoff(() => callZhipuAI([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ]));
 
-    let jsonString = response.text || '{}';
-    if (jsonString.includes('```')) {
-      jsonString = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
-    }
+    // Clean up potential markdown code blocks if the model adds them despite instructions
+    const cleanJson = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
 
     let parsed: any = {};
     try {
-      parsed = JSON.parse(jsonString);
+      parsed = JSON.parse(cleanJson);
     } catch (e) {
-      console.warn("Failed to parse Gemini response:", e);
+      console.warn("Failed to parse GLM response:", e);
       return {
         success: false,
         logs: [{
           step: 0,
           nodeId: 'system',
           nodeLabel: 'System Error',
-          message: '解析 AI 响应失败。',
+          message: '解析 AI 响应失败 (Invalid JSON)。',
           status: 'error',
           timestamp: new Date().toISOString()
         }],
@@ -182,14 +240,17 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
     };
 
   } catch (error) {
-    console.error("Gemini Execution Error:", error);
+    console.error("GLM Execution Error:", error);
+    const isQuota = (error instanceof Error) && error.message.includes('429');
     return {
       success: false,
       logs: [{
         step: 0,
         nodeId: 'system',
         nodeLabel: 'System Error',
-        message: `执行失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        message: isQuota 
+          ? 'API 配额已耗尽，请稍后再试 (Error 429)'
+          : `执行失败: ${error instanceof Error ? error.message : '未知错误'}`,
         status: 'error',
         timestamp: new Date().toISOString()
       }]
@@ -203,101 +264,80 @@ export const executeFlowWithGemini = async (nodes: AppNode[], edges: Edge[], var
 export const generateFlowFromDescription = async (
   description: string, 
   currentNodes: AppNode[], 
-  appendTargetId?: string
+  appendTargetId?: string,
+  language: 'zh' | 'en' = 'zh'
 ): Promise<GeneratedFlowData> => {
   
-  const prompt = `
-    You are an AI programming assistant for a visual flow builder.
-    User Request: "${description}"
-    
-    Task:
-    ${appendTargetId ? `Create a sequence of nodes to APPEND after the node with ID "${appendTargetId}".` : 'Create a complete new flowchart based on the description.'}
-    
-    **CRITICAL NODE SELECTION RULES (Follow these priority):**
-    1. **PRIORITIZE VISUAL NODES**: Use the following node types whenever possible to represent logic:
-       - **'decision'**: For ANY "if/else", "check", "verify", "validate" logic.
-       - **'loop'**: For iterations, "while", "for each" logic.
-       - **'http'**: For API calls, web requests, fetching data.
-       - **'db'**: For database operations, SQL queries.
-       - **'delay'**: For waiting or pausing.
-       - **'log'**: For printing messages.
-       - **'aiTask'**: For generative AI tasks.
-       - **'process'**: For generic actions not covered above.
-    
-    2. **MINIMIZE 'code' NODES**: Only use 'code' nodes (C#) for complex arithmetic or string manipulation not possible with visual nodes.
+  const systemPrompt = `
+    You are an expert flowchart architect for a visual programming system.
+    Your goal is to convert user requests into **EXECUTABLE** flowcharts using **SPECIFIC** tools.
 
-    Requirements:
-    1. **Nodes**: Generate a list of nodes with unique IDs.
-    2. **Edges**: Generate edges to connect these nodes logically.
-       - 'decision': sourceHandle 'true'/'false'.
-       - 'loop': sourceHandle 'loopBody'/'loopEnd'.
-    3. **Variables**: Define any new variables required.
+    **STRICT NODE SELECTION RULES (YOU MUST FOLLOW THESE):**
     
-    Context:
-    - Existing Nodes: ${currentNodes.length}
-    - Mode: ${appendTargetId ? 'Append Mode' : 'New Flow Mode'}
+    1. **'decision'**: 
+       - USE FOR: Any logic check, if/else, validation, comparison (e.g., "Is count > 10?", "Check if user exists").
+       - REQUIREMENT: Must contain a condition (e.g. "{x} > 5") in the description.
     
-    Return JSON with 'nodes', 'edges', and 'variables'.
+    2. **'loop'**:
+       - USE FOR: Iteration, while loops, repeating actions.
+       - REQUIREMENT: Must have a 'loopCondition'.
+    
+    3. **'http'**:
+       - USE FOR: API calls, fetching data, webhooks, REST interactions.
+       - DO NOT use 'process' or 'aiTask' for API calls. Use 'http'.
+    
+    4. **'db'**:
+       - USE FOR: Database queries, SQL, saving data, reading records.
+       - DO NOT use 'process' or 'aiTask' for DB operations. Use 'db'.
+    
+    5. **'log'**:
+       - USE FOR: Printing output, debugging, showing messages to the user.
+    
+    6. **'delay'**:
+       - USE FOR: Pausing execution, waiting.
+    
+    7. **'functionCall'**:
+       - USE FOR: Complex calculations or business logic that requires code.
+    
+    8. **'aiTask'**:
+       - USE ONLY IF: The user explicitly asks for "AI generation", "summarization", "LLM", or "creative writing".
+       - DO NOT use it for general logic or data processing.
+    
+    9. **'process'**:
+       - USE FOR: Generic steps that don't fit above (rarely used if strict mapping is followed).
+
+    **CRITICAL CONSTRAINTS:**
+    - **Executable**: The flow must be valid. 
+    - **Decision Edges**: A 'decision' node MUST have outgoing edges labeled for 'true' and 'false' paths (use sourceHandle: 'true' / 'false').
+    - **Loop Edges**: A 'loop' node MUST have 'loopBody' and 'loopEnd' edges.
+    - **Variables**: If the user implies data storage, define a variable.
+
+    Output Language: **${language === 'zh' ? 'Chinese (Simplified)' : 'English'}**.
+    
+    Return JSON ONLY with 'nodes', 'edges', and 'variables'. Do not include markdown formatting.
+  `;
+
+  const userPrompt = `
+    User Request: "${description}"
+    Task: ${appendTargetId ? `Create a sequence of nodes to APPEND after the node with ID "${appendTargetId}".` : 'Create a complete new flowchart based on the description.'}
+    Context: Existing Nodes: ${currentNodes.length}, Mode: ${appendTargetId ? 'Append Mode' : 'New Flow Mode'}
+    
+    Output Schema:
+    {
+      "nodes": [ { "id": "string", "type": "string", "label": "string", "description": "string", "code": "string", "duration": number, "url": "string", "method": "string", "dbOperation": "string", "sql": "string", "loopCondition": "string" } ],
+      "edges": [ { "source": "string", "target": "string", "label": "string", "sourceHandle": "string" } ],
+      "variables": [ { "name": "string", "type": "string", "value": "string" } ]
+    }
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            nodes: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  type: { type: Type.STRING },
-                  label: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  code: { type: Type.STRING },
-                  duration: { type: Type.INTEGER },
-                  url: { type: Type.STRING },
-                  method: { type: Type.STRING },
-                  dbOperation: { type: Type.STRING },
-                  sql: { type: Type.STRING },
-                  loopCondition: { type: Type.STRING }
-                }
-              }
-            },
-            edges: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  source: { type: Type.STRING },
-                  target: { type: Type.STRING },
-                  label: { type: Type.STRING },
-                  sourceHandle: { type: Type.STRING }
-                }
-              }
-            },
-            variables: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  type: { type: Type.STRING, enum: ['string', 'number', 'boolean'] },
-                  value: { type: Type.STRING }
-                }
-              }
-            }
-          }
-        }
-      }
-    });
+    const jsonString = await retryWithBackoff(() => callZhipuAI([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ]));
 
-    const jsonString = response.text || '{}';
-    const parsed = JSON.parse(jsonString);
+    const cleanJson = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
 
     // Post-process to ensure IDs and types match AppNode structure
     const newNodes: AppNode[] = (parsed.nodes || []).map((n: any) => ({
@@ -341,5 +381,50 @@ export const generateFlowFromDescription = async (
   } catch (e) {
     console.error("AI Copilot Error:", e);
     return { nodes: [], edges: [], variables: [] };
+  }
+};
+
+/**
+ * AI Code Assistant: Generate C# code snippets
+ */
+export const generateCodeFromDescription = async (
+  description: string, 
+  existingCode: string,
+  language: 'zh' | 'en' = 'zh'
+): Promise<string> => {
+  const systemPrompt = `
+    You are an expert C# developer assistant.
+    Your task is to generate or modify C# code based on the user's request.
+    
+    Context:
+    - You are editing a specific C# file inside a namespace and class.
+    - Ensure the generated code is syntactically correct C#.
+    
+    Output:
+    - Return ONLY the C# code (or the snippet to insert).
+    - If the user asks for a new function, generate the full method signature and body.
+    - Do NOT include markdown blocks like \`\`\`csharp. Just the code.
+    - Comments should be in **${language === 'zh' ? 'Chinese (Simplified)' : 'English'}**.
+  `;
+
+  const userPrompt = `
+    Current Code Context:
+    ${existingCode}
+
+    User Request: "${description}"
+    
+    Please provide the code snippet to be inserted at the cursor position. If it is a new method, provide the full method. If it's logic inside a method, provide the statements.
+  `;
+
+  try {
+    const code = await retryWithBackoff(() => callZhipuAI([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ]));
+
+    return code.replace(/```csharp/g, '').replace(/```/g, '').trim();
+  } catch (e) {
+    console.error("AI Code Gen Error:", e);
+    return "// Error generating code. Please try again.";
   }
 };

@@ -16,6 +16,7 @@ export const translations = {
     'btn.variables': '变量 & 结构体',
     'btn.compile': '编译检查',
     'btn.run': '运行流程',
+    'btn.stop': '停止运行',
     'btn.running': '运行中...',
     
     // Sidebar
@@ -36,14 +37,18 @@ export const translations = {
     'node.db': '数据库',
     'node.aiTask': 'AI 生成',
     'node.log': '日志打印',
+    'node.functionCall': '函数调用',
 
     // Project Sidebar
     'project.title': '项目管理',
     'project.flows': '流程列表',
+    'project.functions': '代码函数 (C#)',
     'project.libs': '依赖库 (DLL)',
     'project.settings': '项目设置',
     'project.noLibs': '暂无依赖库',
+    'project.noFuncs': '暂无代码文件',
     'project.newFlow': '新建流程',
+    'project.newFunc': '新建函数',
     'project.search': '搜索文件...',
     'ctx.rename': '重命名',
     'ctx.delete': '删除',
@@ -73,6 +78,10 @@ export const translations = {
     'config.label': '标签名称',
     'config.apply': '应用更改',
     'config.subflow.select': '选择子流程',
+    'config.func.file': '选择代码文件',
+    'config.func.method': '选择方法',
+    'config.func.params': '参数映射',
+    'config.func.return': '返回值存入变量',
   },
   en: {
     // TopBar
@@ -86,6 +95,7 @@ export const translations = {
     'btn.variables': 'Vars & Structs',
     'btn.compile': 'Compile',
     'btn.run': 'Run Flow',
+    'btn.stop': 'Stop',
     'btn.running': 'Running...',
 
     // Sidebar
@@ -106,14 +116,18 @@ export const translations = {
     'node.db': 'Database',
     'node.aiTask': 'AI Task',
     'node.log': 'Log',
+    'node.functionCall': 'Function Call',
 
     // Project Sidebar
     'project.title': 'Project Manager',
     'project.flows': 'Flows',
+    'project.functions': 'Code Functions (C#)',
     'project.libs': 'Libraries (DLL)',
     'project.settings': 'Project Settings',
     'project.noLibs': 'No libraries',
+    'project.noFuncs': 'No code files',
     'project.newFlow': 'New Flow',
+    'project.newFunc': 'New Function',
     'project.search': 'Search files...',
     'ctx.rename': 'Rename',
     'ctx.delete': 'Delete',
@@ -143,6 +157,10 @@ export const translations = {
     'config.label': 'Label',
     'config.apply': 'Apply Changes',
     'config.subflow.select': 'Select Sub-flow',
+    'config.func.file': 'Select Code File',
+    'config.func.method': 'Select Method',
+    'config.func.params': 'Parameters',
+    'config.func.return': 'Store Result In',
   }
 };
 
